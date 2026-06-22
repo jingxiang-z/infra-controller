@@ -230,8 +230,10 @@ impl RedfishClient {
                     .map_err(|err| redact_password(err, curr_password.as_str()))
                     .map_err(map_redfish_error)?;
             }
-            // Handle Vikings
-            RedfishVendor::AMI => {
+            // Vikings and Lenovo GB300s. GB300s are detected as AMI at this
+            // point (vendor isn't refined to LenovoGB300 until later), but both
+            // rotate via the same admin account, so handle them together.
+            RedfishVendor::AMI | RedfishVendor::LenovoGB300 => {
                 /*
                 https://docs.nvidia.com/dgx/dgxh100-user-guide/redfish-api-supp.html
 
