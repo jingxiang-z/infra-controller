@@ -25,9 +25,7 @@ use carbide_network::deserialize_input_mac_to_address;
 use carbide_redfish::boot_interface::BootInterfaceTarget;
 use carbide_redfish::libredfish::conv::{IntoModel, bmc_vendor};
 use carbide_redfish::libredfish::dpu_bios::is_dpu_bios_attributes_not_ready;
-use carbide_redfish::libredfish::{
-    RedfishAuth, RedfishClientCreationError, RedfishClientPool, redact_password,
-};
+use carbide_redfish::libredfish::{RedfishAuth, RedfishClientCreationError, RedfishClientPool};
 use carbide_redfish::nv_redfish::NvRedfishClientPool;
 use carbide_secrets::credentials::Credentials;
 use libredfish::model::oem::nvidia_dpu::NicMode;
@@ -171,6 +169,25 @@ impl RedfishClient {
         Ok(())
     }
 
+    /// Resolve the precise `RedfishVendor` of a BMC using the supplied
+    /// credentials, delegating to the shared `RedfishClientPool` probe (an
+    /// anonymous service-root read with a credentialed chassis-manufacturer
+    /// fallback for BMCs that don't populate the service-root vendor).
+    pub async fn probe_bmc_vendor(
+        &self,
+        bmc_ip_address: SocketAddr,
+        credentials: Credentials,
+    ) -> Result<RedfishVendor, EndpointExplorationError> {
+        self.redfish_client_pool
+            .probe_bmc_vendor(
+                &bmc_ip_address.ip().to_string(),
+                Some(bmc_ip_address.port()),
+                credentials,
+            )
+            .await
+            .map_err(map_redfish_client_creation_error)
+    }
+
     pub async fn set_bmc_root_password(
         &self,
         bmc_ip_address: SocketAddr,
@@ -178,143 +195,22 @@ impl RedfishClient {
         current_bmc_root_credentials: Credentials,
         new_password: String,
     ) -> Result<(), EndpointExplorationError> {
-        let (curr_user, curr_password) = match &current_bmc_root_credentials {
-            Credentials::UsernamePassword { username, password } => (username, password),
-        };
-        // We're about to PATCH /AccountService to rotate the BMC password.
-        // That's the only Redfish endpoint we need at this stage, so use an
-        // uninitialized "Unknown" client to skip libredfish's full init
-        // path (which fetches /Systems, /Managers, /Chassis up front).
-        //
-        // Those fetches are unnecessary here, and they actively break
-        // rotation on factory BMCs that refuse reads until the password
-        // has been changed. Notably, NVIDIA GBx00 in factory state
-        // authenticates the supplied creds just fine, but returns HTTP 403
-        // with "Base.1.18.1.PasswordChangeRequired" on /Systems -- so if
-        // we let libredfish initialize first, we never reach the PATCH
-        // that would actually unblock us.
-        //
-        // The vendor-specific client is created below, *after* the rotation
-        // has succeeded, so set_machine_password_policy gets the right
-        // vendor impl (e.g. Lite-On's, which omits
-        // AccountLockoutCounterResetAfter).
-        let client = self
-            .create_direct_redfish_client(
-                bmc_ip_address,
-                current_bmc_root_credentials.clone(),
-                Some(RedfishVendor::Unknown),
+        // The two-client rotation flow (uninitialized `Unknown` client for the
+        // `/AccountService` PATCH, then a vendor-specific client for the
+        // password policy) and the per-vendor dispatch now live on the shared
+        // `RedfishClientPool` primitive so credential rotation can reuse them.
+        // See its docs for why the rotation PATCH must not initialize the
+        // vendor client first.
+        self.redfish_client_pool
+            .set_bmc_root_password(
+                &bmc_ip_address.ip().to_string(),
+                Some(bmc_ip_address.port()),
+                vendor,
+                current_bmc_root_credentials,
+                new_password,
             )
             .await
-            .map_err(|e| {
-                tracing::error!(
-                    "Failed to create Redfish client while setting BMC password for vendor {:?} (bmc_ip = {}): {:?}",
-                    vendor,
-                    bmc_ip_address,
-                    e
-                );
-                map_redfish_client_creation_error(e)
-            })?;
-
-        match vendor {
-            RedfishVendor::Lenovo => {
-                // Change (factory_user, factory_pass) to (factory_user, site_pass)
-                client
-                    .change_password_by_id("1", new_password.as_str())
-                    .await
-                    .map_err(|err| redact_password(err, new_password.as_str()))
-                    .map_err(|err| redact_password(err, curr_password.as_str()))
-                    .map_err(map_redfish_error)?;
-            }
-            RedfishVendor::NvidiaDpu
-            | RedfishVendor::NvidiaGH200
-            | RedfishVendor::NvidiaGBSwitch
-            | RedfishVendor::P3809
-            | RedfishVendor::LiteOnPowerShelf
-            | RedfishVendor::DeltaPowerShelf
-            | RedfishVendor::NvidiaGBx00
-            | RedfishVendor::VeraRubin => {
-                // change_password does things that require a password and DPUs need a first
-                // password use to be change, so just change it directly
-                //
-                // GH200 doesn't require change-on-first-use, but it's good practice. GB200
-                // probably will.
-                client
-                    .change_password_by_id(curr_user.as_str(), new_password.as_str())
-                    .await
-                    .map_err(|err| redact_password(err, new_password.as_str()))
-                    .map_err(|err| redact_password(err, curr_password.as_str()))
-                    .map_err(map_redfish_error)?;
-            }
-            // Vikings and Lenovo GB300s (both still detected as AMI here).
-            // Resolve the admin account by username, and fall back to the conventional
-            // id "2" only when reads are blocked by `PasswordChangeRequired` (Viking factory state).
-            // Any other error propagates.
-            //
-            // https://docs.nvidia.com/dgx/dgxh100-user-guide/redfish-api-supp.html
-            RedfishVendor::AMI | RedfishVendor::LenovoGB300 => {
-                match client
-                    .change_password(curr_user.as_str(), new_password.as_str())
-                    .await
-                {
-                    Ok(()) => {}
-                    Err(libredfish::RedfishError::PasswordChangeRequired) => {
-                        client
-                            .change_password_by_id("2", new_password.as_str())
-                            .await
-                            .map_err(|err| redact_password(err, new_password.as_str()))
-                            .map_err(|err| redact_password(err, curr_password.as_str()))
-                            .map_err(map_redfish_error)?;
-                    }
-                    Err(err) => {
-                        return Err(map_redfish_error(redact_password(
-                            redact_password(err, new_password.as_str()),
-                            curr_password.as_str(),
-                        )));
-                    }
-                }
-            }
-            RedfishVendor::LenovoAMI
-            | RedfishVendor::Supermicro
-            | RedfishVendor::Dell
-            | RedfishVendor::Hpe => {
-                client
-                    .change_password(curr_user.as_str(), new_password.as_str())
-                    .await
-                    .map_err(|err| redact_password(err, new_password.as_str()))
-                    .map_err(|err| redact_password(err, curr_password.as_str()))
-                    .map_err(map_redfish_error)?;
-            }
-            RedfishVendor::Unknown => {
-                // Defensive guard: callers in the explorer resolve the vendor via
-                // `get_redfish_vendor`, which rejects `Unknown` (as `MissingVendor`)
-                // before we ever get here, so this arm is not reachable from the
-                // live exploration path. Note that an unrecognized *raw* vendor
-                // string is already collapsed to `Unknown` by libredfish, so the
-                // original name is unavailable at this point — the meaningful
-                // capture happens in `get_redfish_vendor`. If this ever fires it
-                // signals an internal logic error rather than a parsed vendor.
-                return Err(EndpointExplorationError::UnsupportedVendor {
-                    vendor: vendor.to_string(),
-                });
-            }
-        };
-
-        // Log in using the new credentials and set the vendor-specific password policy.
-        let new_credentials = Credentials::UsernamePassword {
-            username: curr_user.to_string(),
-            password: new_password,
-        };
-        let vendored_client = self
-            .create_direct_redfish_client(bmc_ip_address, new_credentials, Some(vendor))
-            .await
-            .map_err(map_redfish_client_creation_error)?;
-
-        vendored_client
-            .set_machine_password_policy()
-            .await
-            .map_err(map_redfish_error)?;
-
-        Ok(())
+            .map_err(map_redfish_client_creation_error)
     }
 
     pub async fn generate_exploration_report(
