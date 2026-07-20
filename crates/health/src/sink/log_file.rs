@@ -97,6 +97,12 @@ struct JsonLogRecord<'a> {
     endpoint: &'a str,
     collector: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    machine_uuid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    switch_uuid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    power_shelf_uuid: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     machine_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     machine_serial: Option<&'a str>,
@@ -118,6 +124,9 @@ impl<'a> JsonLogRecord<'a> {
         Self {
             endpoint: context.endpoint_key(),
             collector: context.collector_type,
+            machine_uuid: context.machine_uuid().map(|uuid| uuid.to_string()),
+            switch_uuid: context.switch_uuid().map(|uuid| uuid.to_string()),
+            power_shelf_uuid: context.power_shelf_uuid().map(|uuid| uuid.to_string()),
             machine_id: context.machine_id().map(|id| id.to_string()),
             machine_serial: context.machine_serial(),
             driver_version: context.driver_version(),
@@ -288,6 +297,7 @@ mod tests {
                 mac: MacAddress::from_str("aa:bb:cc:dd:ee:ff").unwrap(),
             },
             collector_type: "test",
+            uuid: None,
             metadata: None,
             rack_id: None,
         }
@@ -296,6 +306,11 @@ mod tests {
     /// Builds a log context with representative machine metadata.
     fn machine_context() -> EventContext {
         EventContext {
+            uuid: Some(
+                "550e8400-e29b-41d4-a716-446655440000"
+                    .parse()
+                    .expect("valid inventory UUID"),
+            ),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
                     .parse()
@@ -483,6 +498,11 @@ mod tests {
             parsed["machine_id"],
             "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
         );
+        assert_eq!(
+            parsed["machine_uuid"],
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
+        assert!(parsed.get("resource_uuid").is_none());
         assert_eq!(parsed["machine_serial"], "MN-001");
         assert_eq!(parsed["driver_version"], "570.82");
         assert_eq!(parsed["component_type"], "compute_node");

@@ -29,6 +29,7 @@ use health_report::{
 };
 use nv_redfish::resource::Health as BmcHealth;
 use serde::Serialize;
+use uuid::Uuid;
 
 use crate::endpoint::{BmcAddr, BmcEndpoint, EndpointMetadata, MachineData, SwitchEndpointRole};
 use crate::metrics::MetricLabel;
@@ -46,6 +47,7 @@ pub struct EventContext {
     pub endpoint_key: String,
     pub addr: BmcAddr,
     pub collector_type: &'static str,
+    pub uuid: Option<Uuid>,
     pub metadata: Option<EndpointMetadata>,
     pub rack_id: Option<RackId>,
 }
@@ -56,6 +58,7 @@ impl EventContext {
             endpoint_key: endpoint.key(),
             addr: endpoint.addr.clone(),
             collector_type,
+            uuid: endpoint.uuid,
             metadata: endpoint.metadata.clone(),
             rack_id: endpoint.rack_id.clone(),
         }
@@ -63,6 +66,33 @@ impl EventContext {
 
     pub fn endpoint_key(&self) -> &str {
         &self.endpoint_key
+    }
+
+    /// Returns the external inventory UUID for a machine endpoint.
+    ///
+    /// Cluster inventory entries are physical nodes and do not carry NICo
+    /// endpoint metadata, so an untyped endpoint is treated as a machine.
+    pub fn machine_uuid(&self) -> Option<Uuid> {
+        match &self.metadata {
+            Some(EndpointMetadata::Machine(_)) | None => self.uuid,
+            _ => None,
+        }
+    }
+
+    /// Returns the external inventory UUID for a switch endpoint.
+    pub fn switch_uuid(&self) -> Option<Uuid> {
+        match &self.metadata {
+            Some(EndpointMetadata::Switch(_)) => self.uuid,
+            _ => None,
+        }
+    }
+
+    /// Returns the external inventory UUID for a power-shelf endpoint.
+    pub fn power_shelf_uuid(&self) -> Option<Uuid> {
+        match &self.metadata {
+            Some(EndpointMetadata::PowerShelf(_)) => self.uuid,
+            _ => None,
+        }
     }
 
     /// Returns machine metadata when this context belongs to a machine endpoint.
@@ -667,6 +697,7 @@ mod tests {
             endpoint_key: "00:11:22:33:44:55".to_string(),
             addr: addr(),
             collector_type: "unit-test",
+            uuid: None,
             metadata,
             rack_id: Some(RackId::new("rack-1")),
         }
@@ -1157,5 +1188,29 @@ mod tests {
                 },
             }
         );
+    }
+
+    #[test]
+    fn event_context_exposes_inventory_uuid_by_endpoint_type() {
+        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000")
+            .expect("valid inventory UUID");
+
+        for (kind, expected) in [
+            (ContextKind::Empty, (Some(uuid), None, None)),
+            (ContextKind::Machine, (Some(uuid), None, None)),
+            (ContextKind::Switch, (None, Some(uuid), None)),
+            (ContextKind::PowerShelf, (None, None, Some(uuid))),
+        ] {
+            let mut context = context(kind);
+            context.uuid = Some(uuid);
+            assert_eq!(
+                (
+                    context.machine_uuid(),
+                    context.switch_uuid(),
+                    context.power_shelf_uuid(),
+                ),
+                expected
+            );
+        }
     }
 }

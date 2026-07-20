@@ -381,6 +381,7 @@ mod tests {
                 mac: MacAddress::from_str("AA:BB:CC:DD:EE:FF").unwrap(),
             },
             collector_type,
+            uuid: None,
             metadata: None,
             rack_id: None,
         }
@@ -779,6 +780,7 @@ mod tests {
                     mac: MacAddress::from_str("AA:BB:CC:DD:EE:FF").unwrap(),
                 },
                 collector_type: ON_CHANGE_STREAM_ID_SYSTEM_EVENTS,
+                uuid: None,
                 metadata: Some(EndpointMetadata::Switch(SwitchData {
                     id: Some(switch_id),
                     serial: "SN-SWITCH-001".to_string(),

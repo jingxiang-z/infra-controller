@@ -409,9 +409,9 @@ mod tests {
         let machine_id = "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
             .parse()
             .expect("valid machine id");
-        let resource_uuid = "550e8400-e29b-41d4-a716-446655440000"
+        let inventory_uuid = "550e8400-e29b-41d4-a716-446655440000"
             .parse()
-            .expect("valid resource UUID");
+            .expect("valid inventory UUID");
         let domain_uuid = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("valid NVLink domain UUID");
@@ -423,7 +423,7 @@ mod tests {
             password: Some("pass".to_string()),
             machine: Some(StaticMachineEndpoint {
                 id: "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0".to_string(),
-                uuid: Some(resource_uuid),
+                uuid: Some(inventory_uuid),
                 serial: Some("MN-001".to_string()),
                 slot_number: Some(15),
                 tray_index: Some(5),
@@ -439,7 +439,7 @@ mod tests {
         let endpoints = source.fetch_bmc_hosts().await.unwrap();
 
         assert_eq!(endpoints.len(), 1);
-        assert_eq!(endpoints[0].uuid, Some(resource_uuid));
+        assert_eq!(endpoints[0].uuid, Some(inventory_uuid));
         assert_eq!(
             endpoints[0]
                 .rack_id

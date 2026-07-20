@@ -503,7 +503,7 @@ mod tests {
     use crate::endpoint::test_support::reqwest;
 
     #[test]
-    fn file_inventory_accepts_optional_resource_uuid() {
+    fn file_inventory_accepts_optional_uuid() {
         let inventory: FileInventory = serde_json::from_str(
             r#"{
                 "default_credentials": {"username": "admin", "password": "secret"},
@@ -570,7 +570,7 @@ mod tests {
     }
 
     #[test]
-    fn file_inventory_rejects_invalid_resource_uuid() {
+    fn file_inventory_rejects_invalid_uuid() {
         let result = serde_json::from_str::<FileInventory>(
             r#"{
                 "default_credentials": {"username": "admin", "password": null},

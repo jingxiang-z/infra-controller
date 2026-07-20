@@ -93,6 +93,15 @@ impl PrometheusSink {
             ),
         ];
 
+        if let Some(uuid) = context.machine_uuid() {
+            labels.push((Cow::Borrowed("machine_uuid"), uuid.to_string()));
+        }
+        if let Some(uuid) = context.switch_uuid() {
+            labels.push((Cow::Borrowed("switch_uuid"), uuid.to_string()));
+        }
+        if let Some(uuid) = context.power_shelf_uuid() {
+            labels.push((Cow::Borrowed("power_shelf_uuid"), uuid.to_string()));
+        }
         if let Some(machine_id) = context.machine_id() {
             labels.push((Cow::Borrowed("machine_id"), machine_id.to_string()));
         }
@@ -274,6 +283,11 @@ mod tests {
                 mac: MacAddress::from_str("42:9e:b1:bd:9d:dd").unwrap(),
             },
             collector_type: "sensor_collector",
+            uuid: Some(
+                "550e8400-e29b-41d4-a716-446655440000"
+                    .parse()
+                    .expect("valid inventory UUID"),
+            ),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
                     .parse()
@@ -298,6 +312,10 @@ mod tests {
             label_value("machine_id"),
             Some("fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0")
         );
+        assert_eq!(
+            label_value("machine_uuid"),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
         assert_eq!(label_value("serial_number"), Some("MN-001"));
         assert_eq!(label_value("rack_id"), Some("RACK_1"));
         assert_eq!(label_value("machine_slot_number"), Some("15"));
@@ -320,6 +338,11 @@ mod tests {
                 mac: MacAddress::from_str("11:22:33:44:55:66").unwrap(),
             },
             collector_type: "switch_collector",
+            uuid: Some(
+                "660e8400-e29b-41d4-a716-446655440000"
+                    .parse()
+                    .expect("valid switch UUID"),
+            ),
             metadata: Some(EndpointMetadata::Switch(SwitchData {
                 id: Some(switch_id),
                 serial: "SN-SWITCH-001".to_string(),
@@ -341,6 +364,11 @@ mod tests {
         };
 
         assert_eq!(label_value("switch_id"), Some(switch_id_label.as_str()));
+        assert_eq!(
+            label_value("switch_uuid"),
+            Some("660e8400-e29b-41d4-a716-446655440000")
+        );
+        assert_eq!(label_value("machine_uuid"), None);
         assert_eq!(label_value("serial_number"), Some("SN-SWITCH-001"));
         assert_eq!(label_value("rack_id"), Some("RACK_2"));
         assert_eq!(label_value("switch_slot_number"), Some("7"));
