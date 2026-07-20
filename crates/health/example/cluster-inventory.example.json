@@ -12,7 +12,11 @@
       "uuid": "550e8400-e29b-41d4-a716-446655440000"
     },
     {
-      "bmc_ip": "10.0.0.2"
+      "bmc_ip": "10.0.0.2",
+      "credentials": {
+        "username": "root",
+        "password": "node-secret"
+      }
     }
   ]
 }

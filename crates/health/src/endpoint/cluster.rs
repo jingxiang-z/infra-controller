@@ -41,7 +41,7 @@ struct FileInventory {
     nodes: Vec<FileNode>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct FileCredentials {
     username: String,
     password: Option<String>,
@@ -54,6 +54,7 @@ struct FileNode {
     bmc_mac: Option<String>,
     rack: Option<String>,
     uuid: Option<Uuid>,
+    credentials: Option<FileCredentials>,
 }
 
 // ── Canonical internal node shape (both paths produce this) ──────────────────
@@ -66,6 +67,29 @@ struct ClusterNode {
     uuid: Option<Uuid>,
     username: String,
     password: Option<String>,
+}
+
+impl FileInventory {
+    fn into_cluster_nodes(self) -> Vec<ClusterNode> {
+        let default_credentials = self.default_credentials;
+        self.nodes
+            .into_iter()
+            .map(|node| {
+                let credentials = node
+                    .credentials
+                    .unwrap_or_else(|| default_credentials.clone());
+                ClusterNode {
+                    hostname: node.hostname,
+                    bmc_ip: node.bmc_ip,
+                    bmc_mac: node.bmc_mac,
+                    rack: node.rack.filter(|rack| !rack.is_empty()),
+                    uuid: node.uuid,
+                    username: credentials.username,
+                    password: credentials.password,
+                }
+            })
+            .collect()
+    }
 }
 
 // ── Cluster Manager JSON RPC ────────────────────────────────────────────────
@@ -381,21 +405,7 @@ fn read_from_file(cfg: &ClusterEndpointSourceConfig) -> Result<Vec<ClusterNode>,
         ))
     })?;
     let inventory: FileInventory = serde_json::from_str(&contents)?;
-    let username = inventory.default_credentials.username;
-    let password = inventory.default_credentials.password;
-    Ok(inventory
-        .nodes
-        .into_iter()
-        .map(|n| ClusterNode {
-            hostname: n.hostname,
-            bmc_ip: n.bmc_ip,
-            bmc_mac: n.bmc_mac,
-            rack: n.rack.filter(|rack| !rack.is_empty()),
-            uuid: n.uuid,
-            username: username.clone(),
-            password: password.clone(),
-        })
-        .collect())
+    Ok(inventory.into_cluster_nodes())
 }
 
 fn build_endpoints(
@@ -506,7 +516,8 @@ mod tests {
                         "uuid": "550e8400-e29b-41d4-a716-446655440000"
                     },
                     {
-                        "bmc_ip": "10.0.0.2"
+                        "bmc_ip": "10.0.0.2",
+                        "credentials": {"username": "root", "password": "node-secret"}
                     }
                 ]
             }"#,
@@ -526,6 +537,36 @@ mod tests {
         assert_eq!(inventory.nodes[1].bmc_mac, None);
         assert_eq!(inventory.nodes[1].rack, None);
         assert_eq!(inventory.nodes[1].uuid, None);
+        assert_eq!(
+            inventory.nodes[1]
+                .credentials
+                .as_ref()
+                .map(|credentials| credentials.username.as_str()),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn file_inventory_resolves_default_and_per_node_credentials() {
+        let inventory: FileInventory = serde_json::from_str(
+            r#"{
+                "default_credentials": {"username": "admin", "password": "default-secret"},
+                "nodes": [
+                    {"bmc_ip": "10.0.0.1"},
+                    {
+                        "bmc_ip": "10.0.0.2",
+                        "credentials": {"username": "root", "password": "node-secret"}
+                    }
+                ]
+            }"#,
+        )
+        .expect("cluster inventory should parse");
+
+        let nodes = inventory.into_cluster_nodes();
+        assert_eq!(nodes[0].username, "admin");
+        assert_eq!(nodes[0].password.as_deref(), Some("default-secret"));
+        assert_eq!(nodes[1].username, "root");
+        assert_eq!(nodes[1].password.as_deref(), Some("node-secret"));
     }
 
     #[test]
