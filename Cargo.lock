@@ -2040,6 +2040,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "url",
+ "uuid",
  "x509-parser",
 ]
 

@@ -209,6 +209,9 @@ pub struct StaticMachineEndpoint {
     /// Stable NICo machine ID for this BMC endpoint.
     pub id: String,
 
+    /// Optional UUID assigned to this resource by an inventory source.
+    pub uuid: Option<uuid::Uuid>,
+
     /// Optional chassis serial to emit as machine telemetry metadata.
     pub serial: Option<String>,
 
@@ -229,6 +232,7 @@ pub struct StaticMachineEndpoint {
 #[serde(deny_unknown_fields)]
 pub struct StaticPowerShelfEndpoint {
     pub id: Option<String>,
+    pub uuid: Option<uuid::Uuid>,
     pub serial: Option<String>,
 }
 
@@ -247,6 +251,7 @@ fn default_static_switch_endpoint_role() -> StaticSwitchEndpointRole {
 #[serde(deny_unknown_fields)]
 pub struct StaticSwitchEndpoint {
     pub id: Option<String>,
+    pub uuid: Option<uuid::Uuid>,
     pub serial: Option<String>,
     #[serde(alias = "physical_slot_number")]
     pub slot_number: Option<i32>,
@@ -3256,21 +3261,21 @@ ip = "10.0.1.2"
 mac = "11:22:33:44:55:11"
 username = "cumulus"
 password = "pass"
-machine = { id = "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0", serial = "MN-001" }
+machine = { id = "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0", uuid = "550e8400-e29b-41d4-a716-446655440000", serial = "MN-001" }
 
 [[endpoint_sources.static_bmc_endpoints]]
 ip = "10.0.1.1"
 mac = "11:22:33:44:55:66"
 username = "cumulus"
 password = "pass"
-switch = { id = "fsw100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0", serial = "SN-SW-001", slot_number = 7, tray_index = 3 }
+switch = { id = "fsw100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0", uuid = "6295eb37-e29b-41d4-a716-446655440000", serial = "SN-SW-001", slot_number = 7, tray_index = 3 }
 
 [[endpoint_sources.static_bmc_endpoints]]
 ip = "10.0.2.1"
 mac = "22:33:44:55:66:77"
 username = "admin"
 password = "pass"
-power_shelf = { id = "fps100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0", serial = "SN-PS-001" }
+power_shelf = { id = "fps100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0", uuid = "822154f2-e29b-41d4-a716-446655440000", serial = "SN-PS-001" }
 "#;
 
         let config: Config = Figment::new()
@@ -3306,6 +3311,15 @@ power_shelf = { id = "fps100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1
             Some("MN-001")
         );
         assert_eq!(
+            config.endpoint_sources.static_bmc_endpoints[1]
+                .machine
+                .as_ref()
+                .and_then(|machine| machine.uuid)
+                .map(|uuid| uuid.to_string())
+                .as_deref(),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
+        assert_eq!(
             config.endpoint_sources.static_bmc_endpoints[2]
                 .switch
                 .as_ref()
@@ -3318,6 +3332,15 @@ power_shelf = { id = "fps100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1
                 .as_ref()
                 .and_then(|switch| switch.serial.as_deref()),
             Some("SN-SW-001")
+        );
+        assert_eq!(
+            config.endpoint_sources.static_bmc_endpoints[2]
+                .switch
+                .as_ref()
+                .and_then(|switch| switch.uuid)
+                .map(|uuid| uuid.to_string())
+                .as_deref(),
+            Some("6295eb37-e29b-41d4-a716-446655440000")
         );
         assert_eq!(
             config.endpoint_sources.static_bmc_endpoints[2]
@@ -3346,6 +3369,15 @@ power_shelf = { id = "fps100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1
                 .as_ref()
                 .and_then(|power_shelf| power_shelf.serial.as_deref()),
             Some("SN-PS-001")
+        );
+        assert_eq!(
+            config.endpoint_sources.static_bmc_endpoints[3]
+                .power_shelf
+                .as_ref()
+                .and_then(|power_shelf| power_shelf.uuid)
+                .map(|uuid| uuid.to_string())
+                .as_deref(),
+            Some("822154f2-e29b-41d4-a716-446655440000")
         );
     }
 
@@ -3533,6 +3565,10 @@ switch = { serial = "SN-SW-001" }
             .as_ref()
             .expect("machine metadata");
         assert_eq!(machine.serial.as_deref(), Some("MN-001"));
+        assert_eq!(
+            machine.uuid.map(|uuid| uuid.to_string()),
+            Some("550e8400-e29b-41d4-a716-446655440000".to_string())
+        );
         assert_eq!(machine.slot_number, Some(15));
         assert_eq!(machine.tray_index, Some(5));
         assert_eq!(
@@ -3557,6 +3593,14 @@ switch = { serial = "SN-SW-001" }
             config.endpoint_sources.static_bmc_endpoints[1]
                 .switch
                 .as_ref()
+                .and_then(|switch| switch.uuid)
+                .map(|uuid| uuid.to_string()),
+            Some("6295eb37-e29b-41d4-a716-446655440000".to_string())
+        );
+        assert_eq!(
+            config.endpoint_sources.static_bmc_endpoints[1]
+                .switch
+                .as_ref()
                 .map(|switch| switch.endpoint_role),
             Some(StaticSwitchEndpointRole::Bmc)
         );
@@ -3566,6 +3610,14 @@ switch = { serial = "SN-SW-001" }
                 .as_ref()
                 .and_then(|switch| switch.serial.as_deref()),
             Some("SN-SWITCH-HOST-001")
+        );
+        assert_eq!(
+            config.endpoint_sources.static_bmc_endpoints[2]
+                .switch
+                .as_ref()
+                .and_then(|switch| switch.uuid)
+                .map(|uuid| uuid.to_string()),
+            Some("6295eb37-e29b-41d4-a716-446655440000".to_string())
         );
         assert_eq!(
             config.endpoint_sources.static_bmc_endpoints[2]
@@ -3587,6 +3639,14 @@ switch = { serial = "SN-SW-001" }
                 .as_ref()
                 .and_then(|power_shelf| power_shelf.serial.as_deref()),
             Some("SN-POWER-SHELF-001")
+        );
+        assert_eq!(
+            config.endpoint_sources.static_bmc_endpoints[3]
+                .power_shelf
+                .as_ref()
+                .and_then(|power_shelf| power_shelf.uuid)
+                .map(|uuid| uuid.to_string()),
+            Some("822154f2-e29b-41d4-a716-446655440000".to_string())
         );
         if let Configurable::Enabled(ref health_report) = config.sinks.health_report {
             assert_eq!(health_report.workers, 8);

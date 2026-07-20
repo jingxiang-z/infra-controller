@@ -165,6 +165,17 @@ impl StaticEndpointSource {
                 None
             };
 
+            let uuid = cfg
+                .machine
+                .as_ref()
+                .and_then(|machine| machine.uuid)
+                .or_else(|| {
+                    cfg.power_shelf
+                        .as_ref()
+                        .and_then(|power_shelf| power_shelf.uuid)
+                })
+                .or_else(|| cfg.switch.as_ref().and_then(|switch| switch.uuid));
+
             let addr = BmcAddr {
                 ip: cfg.ip,
                 port: cfg.port,
@@ -194,6 +205,7 @@ impl StaticEndpointSource {
             };
             let endpoint = BmcEndpoint {
                 addr,
+                uuid,
                 metadata,
                 rack_id: cfg.rack_id.as_ref().map(|id| RackId::new(id.as_str())),
                 bmc,
@@ -329,6 +341,7 @@ mod tests {
             power_shelf: None,
             switch: Some(StaticSwitchEndpoint {
                 id: Some(switch_id.to_string()),
+                uuid: None,
                 serial: Some("SN-001".to_string()),
                 slot_number: Some(7),
                 tray_index: Some(3),
@@ -371,6 +384,7 @@ mod tests {
             machine: None,
             power_shelf: Some(StaticPowerShelfEndpoint {
                 id: Some(power_shelf_id.to_string()),
+                uuid: None,
                 serial: Some("PS-001".to_string()),
             }),
             switch: None,
@@ -395,6 +409,9 @@ mod tests {
         let machine_id = "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
             .parse()
             .expect("valid machine id");
+        let resource_uuid = "550e8400-e29b-41d4-a716-446655440000"
+            .parse()
+            .expect("valid resource UUID");
         let domain_uuid = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("valid NVLink domain UUID");
@@ -406,6 +423,7 @@ mod tests {
             password: Some("pass".to_string()),
             machine: Some(StaticMachineEndpoint {
                 id: "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0".to_string(),
+                uuid: Some(resource_uuid),
                 serial: Some("MN-001".to_string()),
                 slot_number: Some(15),
                 tray_index: Some(5),
@@ -421,6 +439,7 @@ mod tests {
         let endpoints = source.fetch_bmc_hosts().await.unwrap();
 
         assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].uuid, Some(resource_uuid));
         assert_eq!(
             endpoints[0]
                 .rack_id
@@ -451,6 +470,7 @@ mod tests {
             password: Some("pass".to_string()),
             machine: Some(StaticMachineEndpoint {
                 id: "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0".to_string(),
+                uuid: None,
                 serial: None,
                 slot_number: None,
                 tray_index: None,

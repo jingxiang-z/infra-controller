@@ -59,6 +59,7 @@ pub(crate) mod test_support {
         );
         BmcEndpoint {
             addr,
+            uuid: None,
             metadata,
             rack_id,
             bmc,
