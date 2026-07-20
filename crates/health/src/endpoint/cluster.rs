@@ -23,7 +23,7 @@ use carbide_uuid::rack::RackId;
 use mac_address::MacAddress;
 use nv_redfish::bmc_http::reqwest::Client as ReqwestClient;
 use reqwest::Client as HttpClient;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use serde_json::json;
 use url::Url;
 use uuid::Uuid;
@@ -51,19 +51,9 @@ struct FileCredentials {
 struct FileNode {
     hostname: Option<String>,
     bmc_ip: IpAddr,
-    #[serde(default, deserialize_with = "deserialize_optional_mac")]
-    bmc_mac: Option<MacAddress>,
+    bmc_mac: Option<String>,
     rack: Option<String>,
     uuid: Option<Uuid>,
-}
-
-fn deserialize_optional_mac<'de, D>(deserializer: D) -> Result<Option<MacAddress>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    Option::<String>::deserialize(deserializer)?
-        .map(|value| MacAddress::from_str(&value).map_err(serde::de::Error::custom))
-        .transpose()
 }
 
 // ── Canonical internal node shape (both paths produce this) ──────────────────
@@ -71,7 +61,7 @@ where
 struct ClusterNode {
     hostname: Option<String>,
     bmc_ip: IpAddr,
-    bmc_mac: Option<MacAddress>,
+    bmc_mac: Option<String>,
     rack: Option<String>,
     uuid: Option<Uuid>,
     username: String,
@@ -434,10 +424,24 @@ fn build_endpoints(
         // Use the inventory MAC when available. Otherwise, create a deterministic
         // locally-administered cache key: 02:00:<o1>:<o2>:<o3>:<o4>.
         // Connectivity is IP-based in either case.
-        let mac = node.bmc_mac.unwrap_or_else(|| {
-            let [o1, o2, o3, o4] = v4.octets();
-            MacAddress::new([0x02, 0x00, o1, o2, o3, o4])
-        });
+        let mac = match node.bmc_mac.as_deref() {
+            Some(bmc_mac) => match MacAddress::from_str(bmc_mac) {
+                Ok(mac) => mac,
+                Err(error) => {
+                    tracing::warn!(
+                        endpoint_identity = %identity,
+                        bmc_mac,
+                        ?error,
+                        "Cluster endpoint has invalid BMC MAC; skipping"
+                    );
+                    continue;
+                }
+            },
+            None => {
+                let [o1, o2, o3, o4] = v4.octets();
+                MacAddress::new([0x02, 0x00, o1, o2, o3, o4])
+            }
+        };
 
         let addr = BmcAddr {
             ip: node.bmc_ip,
@@ -515,8 +519,8 @@ mod tests {
         );
         assert_eq!(inventory.nodes[0].hostname.as_deref(), Some("node-01"));
         assert_eq!(
-            inventory.nodes[0].bmc_mac,
-            Some(MacAddress::from_str("aa:bb:cc:dd:ee:ff").unwrap())
+            inventory.nodes[0].bmc_mac.as_deref(),
+            Some("aa:bb:cc:dd:ee:ff")
         );
         assert_eq!(inventory.nodes[1].hostname, None);
         assert_eq!(inventory.nodes[1].bmc_mac, None);
@@ -542,30 +546,13 @@ mod tests {
     }
 
     #[test]
-    fn file_inventory_rejects_invalid_bmc_mac() {
-        let result = serde_json::from_str::<FileInventory>(
-            r#"{
-                "default_credentials": {"username": "admin", "password": null},
-                "nodes": [
-                    {
-                        "bmc_ip": "10.0.0.1",
-                        "bmc_mac": "not-a-mac"
-                    }
-                ]
-            }"#,
-        );
-
-        assert!(result.is_err());
-    }
-
-    #[test]
     fn build_endpoints_prefers_inventory_mac_and_falls_back_to_synthetic_mac() {
         let inventory_mac = MacAddress::from_str("aa:bb:cc:dd:ee:ff").unwrap();
         let nodes = vec![
             ClusterNode {
                 hostname: None,
                 bmc_ip: "10.0.0.1".parse().unwrap(),
-                bmc_mac: Some(inventory_mac),
+                bmc_mac: Some(inventory_mac.to_string()),
                 rack: None,
                 uuid: None,
                 username: "admin".to_string(),
@@ -589,5 +576,20 @@ mod tests {
             endpoints[1].addr.mac,
             MacAddress::from_str("02:00:0a:00:00:02").unwrap()
         );
+    }
+
+    #[test]
+    fn build_endpoints_skips_invalid_inventory_mac() {
+        let nodes = vec![ClusterNode {
+            hostname: None,
+            bmc_ip: "10.0.0.1".parse().unwrap(),
+            bmc_mac: Some("not-a-mac".to_string()),
+            rack: None,
+            uuid: None,
+            username: "admin".to_string(),
+            password: None,
+        }];
+
+        assert!(build_endpoints(nodes, None, &reqwest(), None, 10).is_empty());
     }
 }
