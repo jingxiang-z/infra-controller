@@ -491,11 +491,7 @@ mod tests {
                 mac: MacAddress::from_str("11:22:33:44:55:66").expect("valid mac"),
             },
             collector_type: "test",
-            uuid: Some(
-                "660e8400-e29b-41d4-a716-446655440000"
-                    .parse()
-                    .expect("valid switch UUID"),
-            ),
+            uuid: None,
             metadata: Some(EndpointMetadata::Switch(SwitchData {
                 id: Some(switch_id),
                 serial: "SN-SWITCH-001".to_string(),
@@ -515,11 +511,6 @@ mod tests {
             attr_value(&attrs, "switch.id"),
             Some(switch_id_attr.as_str())
         );
-        assert_eq!(
-            attr_value(&attrs, "resource.uuid"),
-            Some("660e8400-e29b-41d4-a716-446655440000")
-        );
-        assert_eq!(attr_value(&attrs, "resource.type"), Some("switch"));
         assert_eq!(attr_value(&attrs, "rack.id"), Some("RACK_2"));
         assert_eq!(attr_value(&attrs, "component.type"), Some("nvlink_switch"));
         assert_eq!(attr_int_value(&attrs, "switch.slot_number"), Some(7));
@@ -641,11 +632,7 @@ mod tests {
                 mac: MacAddress::from_str("33:44:55:66:77:88").expect("valid mac"),
             },
             collector_type: "sensor_collector",
-            uuid: Some(
-                "770e8400-e29b-41d4-a716-446655440000"
-                    .parse()
-                    .expect("valid power-shelf UUID"),
-            ),
+            uuid: None,
             metadata: Some(EndpointMetadata::PowerShelf(PowerShelfData {
                 id: Some(power_shelf_id),
                 serial: "SN-PS-001".to_string(),
@@ -656,11 +643,6 @@ mod tests {
         let attrs = resource_attributes(&context);
 
         assert_eq!(attr_value(&attrs, "component.type"), Some("power_shelf"));
-        assert_eq!(
-            attr_value(&attrs, "resource.uuid"),
-            Some("770e8400-e29b-41d4-a716-446655440000")
-        );
-        assert_eq!(attr_value(&attrs, "resource.type"), Some("power_shelf"));
         assert_eq!(attr_value(&attrs, "rack.id"), Some("RACK_4"));
     }
 

@@ -75,15 +75,9 @@ impl EventContext {
 
     /// Returns the type of resource identified by [`Self::resource_uuid`].
     ///
-    /// Cluster inventory entries are physical nodes and do not carry NICo
-    /// endpoint metadata, so an untyped endpoint with a UUID is a machine.
+    /// UUIDs currently originate only from cluster inventory nodes.
     pub fn resource_type(&self) -> Option<&'static str> {
-        self.uuid?;
-        Some(match &self.metadata {
-            Some(EndpointMetadata::Switch(_)) => "switch",
-            Some(EndpointMetadata::PowerShelf(_)) => "power_shelf",
-            Some(EndpointMetadata::Machine(_)) | None => "machine",
-        })
+        self.uuid.map(|_| "machine")
     }
 
     /// Returns machine metadata when this context belongs to a machine endpoint.

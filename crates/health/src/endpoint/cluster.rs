@@ -589,13 +589,14 @@ mod tests {
     #[test]
     fn build_endpoints_prefers_inventory_mac_and_falls_back_to_synthetic_mac() {
         let inventory_mac = MacAddress::from_str("aa:bb:cc:dd:ee:ff").unwrap();
+        let inventory_uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
         let nodes = vec![
             ClusterNode {
                 hostname: None,
                 bmc_ip: "10.0.0.1".parse().unwrap(),
                 bmc_mac: Some(inventory_mac.to_string()),
                 rack: None,
-                uuid: None,
+                uuid: Some(inventory_uuid),
                 username: "admin".to_string(),
                 password: None,
             },
@@ -613,6 +614,7 @@ mod tests {
         let endpoints = build_endpoints(nodes, None, &reqwest(), None, 10);
 
         assert_eq!(endpoints[0].addr.mac, inventory_mac);
+        assert_eq!(endpoints[0].uuid, Some(inventory_uuid));
         assert_eq!(
             endpoints[1].addr.mac,
             MacAddress::from_str("02:00:0a:00:00:02").unwrap()

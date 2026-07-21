@@ -336,11 +336,7 @@ mod tests {
                 mac: MacAddress::from_str("11:22:33:44:55:66").unwrap(),
             },
             collector_type: "switch_collector",
-            uuid: Some(
-                "660e8400-e29b-41d4-a716-446655440000"
-                    .parse()
-                    .expect("valid switch UUID"),
-            ),
+            uuid: None,
             metadata: Some(EndpointMetadata::Switch(SwitchData {
                 id: Some(switch_id),
                 serial: "SN-SWITCH-001".to_string(),
@@ -362,11 +358,6 @@ mod tests {
         };
 
         assert_eq!(label_value("switch_id"), Some(switch_id_label.as_str()));
-        assert_eq!(
-            label_value("resource_uuid"),
-            Some("660e8400-e29b-41d4-a716-446655440000")
-        );
-        assert_eq!(label_value("resource_type"), Some("switch"));
         assert_eq!(label_value("serial_number"), Some("SN-SWITCH-001"));
         assert_eq!(label_value("rack_id"), Some("RACK_2"));
         assert_eq!(label_value("switch_slot_number"), Some("7"));
