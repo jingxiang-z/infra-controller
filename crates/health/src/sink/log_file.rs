@@ -99,8 +99,6 @@ struct JsonLogRecord<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     resource_uuid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    resource_type: Option<&'static str>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     machine_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     machine_serial: Option<&'a str>,
@@ -123,7 +121,6 @@ impl<'a> JsonLogRecord<'a> {
             endpoint: context.endpoint_key(),
             collector: context.collector_type,
             resource_uuid: context.resource_uuid().map(|uuid| uuid.to_string()),
-            resource_type: context.resource_type(),
             machine_id: context.machine_id().map(|id| id.to_string()),
             machine_serial: context.machine_serial(),
             driver_version: context.driver_version(),
@@ -499,7 +496,6 @@ mod tests {
             parsed["resource_uuid"],
             "550e8400-e29b-41d4-a716-446655440000"
         );
-        assert_eq!(parsed["resource_type"], "machine");
         assert_eq!(parsed["machine_serial"], "MN-001");
         assert_eq!(parsed["driver_version"], "570.82");
         assert_eq!(parsed["component_type"], "compute_node");

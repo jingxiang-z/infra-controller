@@ -88,9 +88,6 @@ fn resource_attributes(context: &EventContext) -> Vec<KeyValue> {
     if let Some(uuid) = context.resource_uuid() {
         attrs.push(kv("resource.uuid", uuid.to_string()));
     }
-    if let Some(resource_type) = context.resource_type() {
-        attrs.push(kv("resource.type", resource_type.to_string()));
-    }
     if let Some(machine_id) = context.machine_id() {
         attrs.push(kv("machine.id", machine_id.to_string()));
     }
@@ -430,7 +427,6 @@ mod tests {
             attr_value(&attrs, "resource.uuid"),
             Some("550e8400-e29b-41d4-a716-446655440000")
         );
-        assert_eq!(attr_value(&attrs, "resource.type"), Some("machine"));
         assert_eq!(attr_value(&attrs, "rack.id"), Some("RACK_1"));
         assert_eq!(attr_value(&attrs, "machine.serial"), Some("MN-001"));
         assert_eq!(attr_value(&attrs, "driver.version"), Some("570.82"));

@@ -73,13 +73,6 @@ impl EventContext {
         self.uuid
     }
 
-    /// Returns the type of resource identified by [`Self::resource_uuid`].
-    ///
-    /// UUIDs currently originate only from cluster inventory nodes.
-    pub fn resource_type(&self) -> Option<&'static str> {
-        self.uuid.map(|_| "machine")
-    }
-
     /// Returns machine metadata when this context belongs to a machine endpoint.
     fn machine_metadata(&self) -> Option<&MachineData> {
         let Some(EndpointMetadata::Machine(machine)) = self.metadata.as_ref() else {

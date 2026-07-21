@@ -96,9 +96,6 @@ impl PrometheusSink {
         if let Some(uuid) = context.resource_uuid() {
             labels.push((Cow::Borrowed("resource_uuid"), uuid.to_string()));
         }
-        if let Some(resource_type) = context.resource_type() {
-            labels.push((Cow::Borrowed("resource_type"), resource_type.to_string()));
-        }
         if let Some(machine_id) = context.machine_id() {
             labels.push((Cow::Borrowed("machine_id"), machine_id.to_string()));
         }
@@ -313,7 +310,6 @@ mod tests {
             label_value("resource_uuid"),
             Some("550e8400-e29b-41d4-a716-446655440000")
         );
-        assert_eq!(label_value("resource_type"), Some("machine"));
         assert_eq!(label_value("serial_number"), Some("MN-001"));
         assert_eq!(label_value("rack_id"), Some("RACK_1"));
         assert_eq!(label_value("machine_slot_number"), Some("15"));
