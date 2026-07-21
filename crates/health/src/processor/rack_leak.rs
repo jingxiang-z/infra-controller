@@ -151,6 +151,7 @@ mod tests {
             },
             collector_type: "sensor_collector",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: Some(RackId::new(rack)),
         }
@@ -166,6 +167,7 @@ mod tests {
             },
             collector_type: "sensor_collector",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: None,
         }

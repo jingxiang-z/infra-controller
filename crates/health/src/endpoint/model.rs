@@ -16,6 +16,7 @@
  */
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -36,6 +37,8 @@ pub struct BmcEndpoint {
     pub addr: BmcAddr,
     /// Optional UUID assigned to this resource by an inventory source.
     pub uuid: Option<Uuid>,
+    /// Arbitrary telemetry labels assigned by an inventory source.
+    pub inventory_labels: BTreeMap<String, String>,
     pub metadata: Option<EndpointMetadata>,
     pub rack_id: Option<RackId>,
     pub bmc: Arc<BmcClient>,

@@ -139,6 +139,11 @@ fn resource_attributes(context: &EventContext) -> Vec<KeyValue> {
     if let Some(tray) = context.switch_tray_index() {
         attrs.push(int_kv("switch.tray_index", i64::from(tray)));
     }
+    for (key, value) in context.inventory_labels() {
+        if !attrs.iter().any(|attribute| attribute.key == *key) {
+            attrs.push(kv(key, value.clone()));
+        }
+    }
     attrs
 }
 
@@ -347,6 +352,7 @@ mod tests {
             },
             collector_type: "test",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: None,
         }
@@ -408,6 +414,10 @@ mod tests {
                     .parse()
                     .expect("valid inventory UUID"),
             ),
+            inventory_labels: std::collections::BTreeMap::from([
+                ("compute_zone".to_string(), "az51".to_string()),
+                ("node_group".to_string(), "dev3-dh1".to_string()),
+            ]),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
                     .parse()
@@ -427,6 +437,8 @@ mod tests {
             attr_value(&attrs, "resource.uuid"),
             Some("550e8400-e29b-41d4-a716-446655440000")
         );
+        assert_eq!(attr_value(&attrs, "compute_zone"), Some("az51"));
+        assert_eq!(attr_value(&attrs, "node_group"), Some("dev3-dh1"));
         assert_eq!(attr_value(&attrs, "rack.id"), Some("RACK_1"));
         assert_eq!(attr_value(&attrs, "machine.serial"), Some("MN-001"));
         assert_eq!(attr_value(&attrs, "driver.version"), Some("570.82"));
@@ -451,6 +463,7 @@ mod tests {
             },
             collector_type: "test",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
                     .parse()
@@ -488,6 +501,7 @@ mod tests {
             },
             collector_type: "test",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Switch(SwitchData {
                 id: Some(switch_id),
                 serial: "SN-SWITCH-001".to_string(),
@@ -526,6 +540,7 @@ mod tests {
             },
             collector_type: "nvue_gnmi",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Switch(SwitchData {
                 id: Some(switch_id),
                 serial: "SN-SWITCH-001".to_string(),
@@ -579,6 +594,7 @@ mod tests {
             },
             collector_type: "sensor_collector",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Switch(SwitchData {
                 id: Some(switch_id),
                 serial: "SN-SWITCH-BMC-001".to_string(),
@@ -629,6 +645,7 @@ mod tests {
             },
             collector_type: "sensor_collector",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::PowerShelf(PowerShelfData {
                 id: Some(power_shelf_id),
                 serial: "SN-PS-001".to_string(),
@@ -754,6 +771,7 @@ mod tests {
             },
             collector_type: "test",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: None,
         };
@@ -865,6 +883,7 @@ mod tests {
             },
             collector_type: "nvue_gnmi",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Switch(SwitchData {
                 id: Some(switch_id),
                 serial: "SN-SWITCH-001".to_string(),

@@ -281,6 +281,7 @@ mod tests {
             },
             collector_type: "sensor_collector",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
                     .parse()

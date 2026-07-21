@@ -195,6 +195,7 @@ impl StaticEndpointSource {
             let endpoint = BmcEndpoint {
                 addr,
                 uuid: None,
+                inventory_labels: Default::default(),
                 metadata,
                 rack_id: cfg.rack_id.as_ref().map(|id| RackId::new(id.as_str())),
                 bmc,

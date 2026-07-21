@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -54,6 +55,8 @@ struct FileNode {
     bmc_mac: Option<String>,
     rack: Option<String>,
     uuid: Option<Uuid>,
+    #[serde(default)]
+    labels: BTreeMap<String, String>,
     credentials: Option<FileCredentials>,
 }
 
@@ -65,6 +68,7 @@ struct ClusterNode {
     bmc_mac: Option<String>,
     rack: Option<String>,
     uuid: Option<Uuid>,
+    inventory_labels: BTreeMap<String, String>,
     username: String,
     password: Option<String>,
 }
@@ -84,6 +88,7 @@ impl FileInventory {
                     bmc_mac: node.bmc_mac,
                     rack: node.rack.filter(|rack| !rack.is_empty()),
                     uuid: node.uuid,
+                    inventory_labels: node.labels,
                     username: credentials.username,
                     password: credentials.password,
                 }
@@ -301,6 +306,7 @@ fn extract_manager_devices(
             bmc_mac: None,
             rack,
             uuid: None,
+            inventory_labels: BTreeMap::new(),
             username: username.clone(),
             password: password.clone(),
         });
@@ -483,6 +489,7 @@ fn build_endpoints(
         endpoints.push(Arc::new(BmcEndpoint {
             addr,
             uuid: node.uuid,
+            inventory_labels: node.inventory_labels,
             metadata: None,
             rack_id: node.rack.as_deref().map(RackId::new),
             bmc,
@@ -513,7 +520,11 @@ mod tests {
                         "bmc_ip": "10.0.0.1",
                         "bmc_mac": "aa:bb:cc:dd:ee:ff",
                         "rack": "rack-01",
-                        "uuid": "550e8400-e29b-41d4-a716-446655440000"
+                        "uuid": "550e8400-e29b-41d4-a716-446655440000",
+                        "labels": {
+                            "compute_zone": "az51",
+                            "node_group": "dev3-dh1"
+                        }
                     },
                     {
                         "bmc_ip": "10.0.0.2",
@@ -529,6 +540,20 @@ mod tests {
             Some("550e8400-e29b-41d4-a716-446655440000".to_string())
         );
         assert_eq!(inventory.nodes[0].hostname.as_deref(), Some("node-01"));
+        assert_eq!(
+            inventory.nodes[0]
+                .labels
+                .get("compute_zone")
+                .map(String::as_str),
+            Some("az51")
+        );
+        assert_eq!(
+            inventory.nodes[0]
+                .labels
+                .get("node_group")
+                .map(String::as_str),
+            Some("dev3-dh1")
+        );
         assert_eq!(
             inventory.nodes[0].bmc_mac.as_deref(),
             Some("aa:bb:cc:dd:ee:ff")
@@ -597,6 +622,10 @@ mod tests {
                 bmc_mac: Some(inventory_mac.to_string()),
                 rack: None,
                 uuid: Some(inventory_uuid),
+                inventory_labels: BTreeMap::from([
+                    ("compute_zone".to_string(), "az51".to_string()),
+                    ("node_group".to_string(), "dev3-dh1".to_string()),
+                ]),
                 username: "admin".to_string(),
                 password: None,
             },
@@ -606,6 +635,7 @@ mod tests {
                 bmc_mac: None,
                 rack: None,
                 uuid: None,
+                inventory_labels: BTreeMap::new(),
                 username: "admin".to_string(),
                 password: None,
             },
@@ -615,6 +645,20 @@ mod tests {
 
         assert_eq!(endpoints[0].addr.mac, inventory_mac);
         assert_eq!(endpoints[0].uuid, Some(inventory_uuid));
+        assert_eq!(
+            endpoints[0]
+                .inventory_labels
+                .get("compute_zone")
+                .map(String::as_str),
+            Some("az51")
+        );
+        assert_eq!(
+            endpoints[0]
+                .inventory_labels
+                .get("node_group")
+                .map(String::as_str),
+            Some("dev3-dh1")
+        );
         assert_eq!(
             endpoints[1].addr.mac,
             MacAddress::from_str("02:00:0a:00:00:02").unwrap()
@@ -629,6 +673,7 @@ mod tests {
             bmc_mac: Some("not-a-mac".to_string()),
             rack: None,
             uuid: None,
+            inventory_labels: BTreeMap::new(),
             username: "admin".to_string(),
             password: None,
         }];

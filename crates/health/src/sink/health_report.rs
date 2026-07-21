@@ -281,6 +281,7 @@ mod tests {
             },
             collector_type: "test",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: id,
                 machine_serial: None,

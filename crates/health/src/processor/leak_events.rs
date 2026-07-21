@@ -160,6 +160,7 @@ mod tests {
             },
             collector_type: "leak_detector_collector",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: None,
         }

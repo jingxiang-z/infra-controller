@@ -1101,6 +1101,7 @@ mod tests {
             addr,
             collector_type: NVUE_GNMI_SAMPLE_STREAM_ID,
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: None,
         };
@@ -1169,6 +1170,7 @@ mod tests {
                 },
                 collector_type: NVUE_GNMI_SAMPLE_STREAM_ID,
                 uuid: None,
+                inventory_labels: Default::default(),
                 metadata: Some(EndpointMetadata::Switch(SwitchData {
                     id: Some(switch_id),
                     serial: "SN-SWITCH-001".to_string(),

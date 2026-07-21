@@ -1210,6 +1210,7 @@ mod tests {
         let endpoint = Arc::new(BmcEndpoint {
             addr,
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(switch_metadata_with_role(
                 SwitchEndpointRole::Host,
                 true,

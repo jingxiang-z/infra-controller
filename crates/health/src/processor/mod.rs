@@ -192,6 +192,7 @@ mod tests {
             },
             collector_type: "test",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: None,
         }

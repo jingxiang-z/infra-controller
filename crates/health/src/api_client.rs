@@ -603,6 +603,7 @@ impl ApiEndpointSource {
         Ok(Arc::new(BmcEndpoint {
             addr,
             uuid: None,
+            inventory_labels: Default::default(),
             metadata,
             rack_id,
             bmc,

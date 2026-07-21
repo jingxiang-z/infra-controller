@@ -188,6 +188,7 @@ mod tests {
             },
             collector_type: "logs_collector",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: None,
         }

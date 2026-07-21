@@ -123,6 +123,11 @@ impl PrometheusSink {
         if let Some(tray) = context.switch_tray_index() {
             labels.push((Cow::Borrowed("switch_tray_index"), tray.to_string()));
         }
+        for (key, value) in context.inventory_labels() {
+            if !labels.iter().any(|(label, _)| label.as_ref() == key) {
+                labels.push((Cow::Owned(key.clone()), value.clone()));
+            }
+        }
 
         labels
     }
@@ -282,6 +287,10 @@ mod tests {
                     .parse()
                     .expect("valid inventory UUID"),
             ),
+            inventory_labels: std::collections::BTreeMap::from([
+                ("compute_zone".to_string(), "az51".to_string()),
+                ("node_group".to_string(), "dev3-dh1".to_string()),
+            ]),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
                     .parse()
@@ -310,6 +319,8 @@ mod tests {
             label_value("resource_uuid"),
             Some("550e8400-e29b-41d4-a716-446655440000")
         );
+        assert_eq!(label_value("compute_zone"), Some("az51"));
+        assert_eq!(label_value("node_group"), Some("dev3-dh1"));
         assert_eq!(label_value("serial_number"), Some("MN-001"));
         assert_eq!(label_value("rack_id"), Some("RACK_1"));
         assert_eq!(label_value("machine_slot_number"), Some("15"));
@@ -333,6 +344,7 @@ mod tests {
             },
             collector_type: "switch_collector",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Switch(SwitchData {
                 id: Some(switch_id),
                 serial: "SN-SWITCH-001".to_string(),

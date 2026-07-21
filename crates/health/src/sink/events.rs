@@ -16,6 +16,7 @@
  */
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use carbide_uuid::machine::MachineId;
@@ -48,6 +49,7 @@ pub struct EventContext {
     pub addr: BmcAddr,
     pub collector_type: &'static str,
     pub uuid: Option<Uuid>,
+    pub inventory_labels: BTreeMap<String, String>,
     pub metadata: Option<EndpointMetadata>,
     pub rack_id: Option<RackId>,
 }
@@ -59,6 +61,7 @@ impl EventContext {
             addr: endpoint.addr.clone(),
             collector_type,
             uuid: endpoint.uuid,
+            inventory_labels: endpoint.inventory_labels.clone(),
             metadata: endpoint.metadata.clone(),
             rack_id: endpoint.rack_id.clone(),
         }
@@ -71,6 +74,11 @@ impl EventContext {
     /// Returns the external inventory UUID for this endpoint resource.
     pub fn resource_uuid(&self) -> Option<Uuid> {
         self.uuid
+    }
+
+    /// Returns labels supplied by the external inventory source.
+    pub fn inventory_labels(&self) -> &BTreeMap<String, String> {
+        &self.inventory_labels
     }
 
     /// Returns machine metadata when this context belongs to a machine endpoint.
@@ -676,6 +684,7 @@ mod tests {
             addr: addr(),
             collector_type: "unit-test",
             uuid: None,
+            inventory_labels: Default::default(),
             metadata,
             rack_id: Some(RackId::new("rack-1")),
         }
@@ -1167,5 +1176,4 @@ mod tests {
             }
         );
     }
-
 }
