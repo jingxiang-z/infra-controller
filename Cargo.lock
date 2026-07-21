@@ -2643,6 +2643,7 @@ dependencies = [
  "carbide-uuid",
  "chrono",
  "futures-util",
+ "libc",
  "libredfish",
  "opentelemetry 0.32.0",
  "prometheus-text-parser",
