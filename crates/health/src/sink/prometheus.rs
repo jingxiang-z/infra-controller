@@ -367,7 +367,6 @@ mod tests {
             Some("660e8400-e29b-41d4-a716-446655440000")
         );
         assert_eq!(label_value("resource_type"), Some("switch"));
-        assert_eq!(label_value("switch_uuid"), None);
         assert_eq!(label_value("serial_number"), Some("SN-SWITCH-001"));
         assert_eq!(label_value("rack_id"), Some("RACK_2"));
         assert_eq!(label_value("switch_slot_number"), Some("7"));

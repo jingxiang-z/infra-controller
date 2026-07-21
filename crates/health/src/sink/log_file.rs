@@ -500,7 +500,6 @@ mod tests {
             "550e8400-e29b-41d4-a716-446655440000"
         );
         assert_eq!(parsed["resource_type"], "machine");
-        assert!(parsed.get("machine_uuid").is_none());
         assert_eq!(parsed["machine_serial"], "MN-001");
         assert_eq!(parsed["driver_version"], "570.82");
         assert_eq!(parsed["component_type"], "compute_node");

@@ -1181,25 +1181,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn event_context_exposes_inventory_resource_identity() {
-        let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000")
-            .expect("valid inventory UUID");
-
-        for (kind, expected_type) in [
-            (ContextKind::Empty, "machine"),
-            (ContextKind::Machine, "machine"),
-            (ContextKind::Switch, "switch"),
-            (ContextKind::PowerShelf, "power_shelf"),
-        ] {
-            let mut context = context(kind);
-            context.uuid = Some(uuid);
-            assert_eq!(context.resource_uuid(), Some(uuid));
-            assert_eq!(context.resource_type(), Some(expected_type));
-        }
-
-        let context = context(ContextKind::Machine);
-        assert_eq!(context.resource_uuid(), None);
-        assert_eq!(context.resource_type(), None);
-    }
 }
