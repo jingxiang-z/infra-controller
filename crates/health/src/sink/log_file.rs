@@ -97,11 +97,9 @@ struct JsonLogRecord<'a> {
     endpoint: &'a str,
     collector: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
-    machine_uuid: Option<String>,
+    resource_uuid: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    switch_uuid: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    power_shelf_uuid: Option<String>,
+    resource_type: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     machine_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,9 +122,8 @@ impl<'a> JsonLogRecord<'a> {
         Self {
             endpoint: context.endpoint_key(),
             collector: context.collector_type,
-            machine_uuid: context.machine_uuid().map(|uuid| uuid.to_string()),
-            switch_uuid: context.switch_uuid().map(|uuid| uuid.to_string()),
-            power_shelf_uuid: context.power_shelf_uuid().map(|uuid| uuid.to_string()),
+            resource_uuid: context.resource_uuid().map(|uuid| uuid.to_string()),
+            resource_type: context.resource_type(),
             machine_id: context.machine_id().map(|id| id.to_string()),
             machine_serial: context.machine_serial(),
             driver_version: context.driver_version(),
@@ -499,10 +496,11 @@ mod tests {
             "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
         );
         assert_eq!(
-            parsed["machine_uuid"],
+            parsed["resource_uuid"],
             "550e8400-e29b-41d4-a716-446655440000"
         );
-        assert!(parsed.get("resource_uuid").is_none());
+        assert_eq!(parsed["resource_type"], "machine");
+        assert!(parsed.get("machine_uuid").is_none());
         assert_eq!(parsed["machine_serial"], "MN-001");
         assert_eq!(parsed["driver_version"], "570.82");
         assert_eq!(parsed["component_type"], "compute_node");

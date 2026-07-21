@@ -68,31 +68,22 @@ impl EventContext {
         &self.endpoint_key
     }
 
-    /// Returns the external inventory UUID for a machine endpoint.
+    /// Returns the external inventory UUID for this endpoint resource.
+    pub fn resource_uuid(&self) -> Option<Uuid> {
+        self.uuid
+    }
+
+    /// Returns the type of resource identified by [`Self::resource_uuid`].
     ///
     /// Cluster inventory entries are physical nodes and do not carry NICo
-    /// endpoint metadata, so an untyped endpoint is treated as a machine.
-    pub fn machine_uuid(&self) -> Option<Uuid> {
-        match &self.metadata {
-            Some(EndpointMetadata::Machine(_)) | None => self.uuid,
-            _ => None,
-        }
-    }
-
-    /// Returns the external inventory UUID for a switch endpoint.
-    pub fn switch_uuid(&self) -> Option<Uuid> {
-        match &self.metadata {
-            Some(EndpointMetadata::Switch(_)) => self.uuid,
-            _ => None,
-        }
-    }
-
-    /// Returns the external inventory UUID for a power-shelf endpoint.
-    pub fn power_shelf_uuid(&self) -> Option<Uuid> {
-        match &self.metadata {
-            Some(EndpointMetadata::PowerShelf(_)) => self.uuid,
-            _ => None,
-        }
+    /// endpoint metadata, so an untyped endpoint with a UUID is a machine.
+    pub fn resource_type(&self) -> Option<&'static str> {
+        self.uuid?;
+        Some(match &self.metadata {
+            Some(EndpointMetadata::Switch(_)) => "switch",
+            Some(EndpointMetadata::PowerShelf(_)) => "power_shelf",
+            Some(EndpointMetadata::Machine(_)) | None => "machine",
+        })
     }
 
     /// Returns machine metadata when this context belongs to a machine endpoint.
@@ -1191,26 +1182,24 @@ mod tests {
     }
 
     #[test]
-    fn event_context_exposes_inventory_uuid_by_endpoint_type() {
+    fn event_context_exposes_inventory_resource_identity() {
         let uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000")
             .expect("valid inventory UUID");
 
-        for (kind, expected) in [
-            (ContextKind::Empty, (Some(uuid), None, None)),
-            (ContextKind::Machine, (Some(uuid), None, None)),
-            (ContextKind::Switch, (None, Some(uuid), None)),
-            (ContextKind::PowerShelf, (None, None, Some(uuid))),
+        for (kind, expected_type) in [
+            (ContextKind::Empty, "machine"),
+            (ContextKind::Machine, "machine"),
+            (ContextKind::Switch, "switch"),
+            (ContextKind::PowerShelf, "power_shelf"),
         ] {
             let mut context = context(kind);
             context.uuid = Some(uuid);
-            assert_eq!(
-                (
-                    context.machine_uuid(),
-                    context.switch_uuid(),
-                    context.power_shelf_uuid(),
-                ),
-                expected
-            );
+            assert_eq!(context.resource_uuid(), Some(uuid));
+            assert_eq!(context.resource_type(), Some(expected_type));
         }
+
+        let context = context(ContextKind::Machine);
+        assert_eq!(context.resource_uuid(), None);
+        assert_eq!(context.resource_type(), None);
     }
 }
