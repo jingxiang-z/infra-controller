@@ -285,6 +285,7 @@ mod tests {
                     .parse()
                     .expect("valid machine id"),
                 machine_serial: None,
+                machine_uuid: None,
                 slot_number: None,
                 tray_index: None,
                 nvlink_domain_uuid: None,
