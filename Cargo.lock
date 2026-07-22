@@ -7047,6 +7047,7 @@ name = "metrics-endpoint"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "carbide-instrument",
  "carbide-metrics-utils",
  "eyre",
  "http-body-util",
