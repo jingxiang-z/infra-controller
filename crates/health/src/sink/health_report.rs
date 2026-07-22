@@ -283,7 +283,7 @@ mod tests {
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: id,
                 machine_serial: None,
-                machine_uuid: None,
+                system_uuid: None,
                 slot_number: None,
                 tray_index: None,
                 nvlink_domain_uuid: None,
