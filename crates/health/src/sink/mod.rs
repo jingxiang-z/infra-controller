@@ -215,6 +215,7 @@ mod tests {
             collector_type: "test",
             metadata: None,
             rack_id: None,
+            labels: Default::default(),
         };
 
         let event = CollectorEvent::Metric(
@@ -263,6 +264,7 @@ mod tests {
             collector_type: "test",
             metadata: None,
             rack_id: None,
+            labels: Default::default(),
         };
         let event = CollectorEvent::MetricCollectionStart;
 
@@ -362,6 +364,10 @@ mod tests {
                 mac: MacAddress::from_str("42:9e:b1:bd:9d:dd").unwrap(),
             },
             collector_type: "test",
+            labels: std::collections::BTreeMap::from([(
+                "site".to_string(),
+                "rno-dev7".to_string(),
+            )]),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
                     .parse()
@@ -414,6 +420,7 @@ mod tests {
             .export_telemetry()
             .expect("telemetry export should work");
         assert!(export_after_metric.contains("test_sink_hw_sensor_temperature_celsius"));
+        assert!(export_after_metric.contains("site=\"rno-dev7\""));
 
         let service_metrics = metrics_manager
             .export_metrics()
@@ -436,6 +443,7 @@ mod tests {
                 mac: MacAddress::from_str("42:9e:b1:bd:9d:dd").unwrap(),
             },
             collector_type: "sensor_collector",
+            labels: Default::default(),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
                     .parse()
@@ -493,6 +501,7 @@ mod tests {
                 mac: MacAddress::from_str("42:9e:b1:bd:9d:dd").unwrap(),
             },
             collector_type: "sensor_collector",
+            labels: Default::default(),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
                     .parse()
