@@ -883,6 +883,7 @@ dependencies = [
  "axum",
  "axum-extra",
  "axum-server",
+ "bmc-vendor",
  "bytes",
  "chrono",
  "clap",
@@ -1368,6 +1369,7 @@ dependencies = [
  "askama_escape",
  "base64",
  "bmc-mock",
+ "bmc-vendor",
  "carbide-api-core",
  "carbide-api-db",
  "carbide-api-test-helper",
@@ -1449,6 +1451,7 @@ version = "0.0.0"
 dependencies = [
  "async-trait",
  "bmc-mock",
+ "bmc-vendor",
  "carbide-api",
  "carbide-api-db",
  "carbide-instrument",

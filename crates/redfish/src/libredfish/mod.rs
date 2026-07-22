@@ -196,7 +196,9 @@ pub trait RedfishClientPool: Send + Sync + 'static {
             let credentials = self
                 .credential_reader()
                 .get_credentials(&CredentialKey::DpuUefi {
-                    credential_type: CredentialType::DpuHardwareDefault,
+                    credential_type: CredentialType::DpuHardwareDefault {
+                        model: bmc_vendor::DpuModel::Unknown,
+                    },
                 })
                 .await?
                 .unwrap_or(Credentials::UsernamePassword {
