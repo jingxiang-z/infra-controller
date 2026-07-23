@@ -191,6 +191,8 @@ mod tests {
                 mac: MacAddress::from_str("42:9e:b1:bd:9d:dd").expect("valid mac"),
             },
             collector_type: "test",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: None,
         }

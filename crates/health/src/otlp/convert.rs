@@ -85,6 +85,9 @@ fn resource_attributes(context: &EventContext) -> Vec<KeyValue> {
         }
     }
     attrs.push(kv("collector.type", context.collector_type.to_string()));
+    if let Some(uuid) = context.resource_uuid() {
+        attrs.push(kv("resource.uuid", uuid.to_string()));
+    }
     if let Some(machine_id) = context.machine_id() {
         attrs.push(kv("machine.id", machine_id.to_string()));
     }
@@ -135,6 +138,11 @@ fn resource_attributes(context: &EventContext) -> Vec<KeyValue> {
     }
     if let Some(tray) = context.switch_tray_index() {
         attrs.push(int_kv("switch.tray_index", i64::from(tray)));
+    }
+    for (key, value) in context.inventory_labels() {
+        if !attrs.iter().any(|attribute| attribute.key == *key) {
+            attrs.push(kv(key, value.clone()));
+        }
     }
     attrs
 }
@@ -343,6 +351,8 @@ mod tests {
                 mac: MacAddress::from_str("42:9e:b1:bd:9d:dd").expect("valid mac"),
             },
             collector_type: "test",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: None,
         }
@@ -399,6 +409,15 @@ mod tests {
                 mac: MacAddress::from_str("42:9e:b1:bd:9d:dd").expect("valid mac"),
             },
             collector_type: "test",
+            uuid: Some(
+                "550e8400-e29b-41d4-a716-446655440000"
+                    .parse()
+                    .expect("valid inventory UUID"),
+            ),
+            inventory_labels: std::collections::BTreeMap::from([
+                ("compute_zone".to_string(), "az51".to_string()),
+                ("node_group".to_string(), "dev3-dh1".to_string()),
+            ]),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: Some(
                     "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
@@ -416,6 +435,12 @@ mod tests {
 
         let attrs = resource_attributes(&context);
 
+        assert_eq!(
+            attr_value(&attrs, "resource.uuid"),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
+        assert_eq!(attr_value(&attrs, "compute_zone"), Some("az51"));
+        assert_eq!(attr_value(&attrs, "node_group"), Some("dev3-dh1"));
         assert_eq!(attr_value(&attrs, "rack.id"), Some("RACK_1"));
         assert_eq!(attr_value(&attrs, "machine.serial"), Some("MN-001"));
         assert_eq!(attr_value(&attrs, "driver.version"), Some("570.82"));
@@ -439,6 +464,8 @@ mod tests {
                 mac: MacAddress::from_str("42:9e:b1:bd:9d:dd").expect("valid mac"),
             },
             collector_type: "test",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: None,
                 machine_serial: None,
@@ -471,6 +498,8 @@ mod tests {
                 mac: MacAddress::from_str("11:22:33:44:55:66").expect("valid mac"),
             },
             collector_type: "test",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Switch(SwitchData {
                 id: Some(switch_id),
                 serial: "SN-SWITCH-001".to_string(),
@@ -508,6 +537,8 @@ mod tests {
                 mac: MacAddress::from_str("11:22:33:44:55:66").expect("valid mac"),
             },
             collector_type: "nvue_gnmi",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Switch(SwitchData {
                 id: Some(switch_id),
                 serial: "SN-SWITCH-001".to_string(),
@@ -560,6 +591,8 @@ mod tests {
                 mac: MacAddress::from_str("22:33:44:55:66:77").expect("valid mac"),
             },
             collector_type: "sensor_collector",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Switch(SwitchData {
                 id: Some(switch_id),
                 serial: "SN-SWITCH-BMC-001".to_string(),
@@ -609,6 +642,8 @@ mod tests {
                 mac: MacAddress::from_str("33:44:55:66:77:88").expect("valid mac"),
             },
             collector_type: "sensor_collector",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::PowerShelf(PowerShelfData {
                 id: Some(power_shelf_id),
                 serial: "SN-PS-001".to_string(),
@@ -733,6 +768,8 @@ mod tests {
                 mac: MacAddress::from_str("42:9e:b1:bd:9d:dd").expect("valid mac"),
             },
             collector_type: "test",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: None,
         };
@@ -843,6 +880,8 @@ mod tests {
                 mac: MacAddress::from_str("11:22:33:44:55:66").expect("valid mac"),
             },
             collector_type: "nvue_gnmi",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Switch(SwitchData {
                 id: Some(switch_id),
                 serial: "SN-SWITCH-001".to_string(),

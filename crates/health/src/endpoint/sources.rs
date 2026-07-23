@@ -190,6 +190,8 @@ impl StaticEndpointSource {
             };
             let endpoint = BmcEndpoint {
                 addr,
+                uuid: None,
+                inventory_labels: Default::default(),
                 metadata,
                 rack_id: cfg.rack_id.as_ref().map(|id| RackId::new(id.as_str())),
                 bmc,
@@ -417,6 +419,7 @@ mod tests {
         let endpoints = source.fetch_bmc_hosts().await.unwrap();
 
         assert_eq!(endpoints.len(), 1);
+        assert_eq!(endpoints[0].uuid, None);
         assert_eq!(
             endpoints[0]
                 .rack_id

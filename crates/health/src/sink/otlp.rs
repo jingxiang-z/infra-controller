@@ -290,6 +290,8 @@ mod tests {
                 mac: MacAddress::from_str("aa:bb:cc:dd:ee:ff").unwrap(),
             },
             collector_type: "test",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: None,
         }

@@ -16,6 +16,7 @@
  */
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -26,6 +27,7 @@ use carbide_uuid::rack::RackId;
 use carbide_uuid::switch::SwitchId;
 use mac_address::MacAddress;
 use url::Url;
+use uuid::Uuid;
 
 use crate::HealthError;
 use crate::bmc::{BmcClient, BoxFuture};
@@ -33,6 +35,10 @@ use crate::bmc::{BmcClient, BoxFuture};
 #[derive(Clone)]
 pub struct BmcEndpoint {
     pub addr: BmcAddr,
+    /// Optional UUID assigned to this resource by an inventory source.
+    pub uuid: Option<Uuid>,
+    /// Arbitrary telemetry labels assigned by an inventory source.
+    pub inventory_labels: BTreeMap<String, String>,
     pub metadata: Option<EndpointMetadata>,
     pub rack_id: Option<RackId>,
     pub bmc: Arc<BmcClient>,

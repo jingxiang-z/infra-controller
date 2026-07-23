@@ -15,7 +15,9 @@
  * limitations under the License.
  */
 
+use std::collections::BTreeMap;
 use std::net::IpAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use carbide_uuid::rack::RackId;
@@ -25,6 +27,7 @@ use reqwest::Client as HttpClient;
 use serde::Deserialize;
 use serde_json::json;
 use url::Url;
+use uuid::Uuid;
 
 use crate::HealthError;
 use crate::bmc::{BmcClient, FixedCredentialProvider};
@@ -39,7 +42,7 @@ struct FileInventory {
     nodes: Vec<FileNode>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 struct FileCredentials {
     username: String,
     password: Option<String>,
@@ -47,19 +50,51 @@ struct FileCredentials {
 
 #[derive(Debug, Deserialize)]
 struct FileNode {
-    hostname: String,
+    hostname: Option<String>,
     bmc_ip: IpAddr,
-    rack: String,
+    bmc_mac: Option<String>,
+    rack: Option<String>,
+    uuid: Option<Uuid>,
+    #[serde(default)]
+    labels: BTreeMap<String, String>,
+    credentials: Option<FileCredentials>,
 }
 
 // ── Canonical internal node shape (both paths produce this) ──────────────────
 
 struct ClusterNode {
-    hostname: String,
+    hostname: Option<String>,
     bmc_ip: IpAddr,
+    bmc_mac: Option<String>,
     rack: Option<String>,
+    uuid: Option<Uuid>,
+    inventory_labels: BTreeMap<String, String>,
     username: String,
     password: Option<String>,
+}
+
+impl FileInventory {
+    fn into_cluster_nodes(self) -> Vec<ClusterNode> {
+        let default_credentials = self.default_credentials;
+        self.nodes
+            .into_iter()
+            .map(|node| {
+                let credentials = node
+                    .credentials
+                    .unwrap_or_else(|| default_credentials.clone());
+                ClusterNode {
+                    hostname: node.hostname,
+                    bmc_ip: node.bmc_ip,
+                    bmc_mac: node.bmc_mac,
+                    rack: node.rack.filter(|rack| !rack.is_empty()),
+                    uuid: node.uuid,
+                    inventory_labels: node.labels,
+                    username: credentials.username,
+                    password: credentials.password,
+                }
+            })
+            .collect()
+    }
 }
 
 // ── Cluster Manager JSON RPC ────────────────────────────────────────────────
@@ -243,10 +278,10 @@ fn extract_manager_devices(
             .filter(|s| !s.is_empty())
             .map(str::to_string);
 
-        let (Some(hostname), Some(bmc_ip_str)) = (hostname, bmc_ip_str) else {
+        let Some(bmc_ip_str) = bmc_ip_str else {
             tracing::debug!(
                 item_keys = ?item.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()),
-                "Cluster manager device entry missing hostname or BMC IP; skipping. \
+                "Cluster manager device entry missing BMC IP; skipping. \
                  Update field paths in extract_manager_devices once head node is probed."
             );
             continue;
@@ -256,7 +291,7 @@ fn extract_manager_devices(
             Ok(ip) => ip,
             Err(e) => {
                 tracing::warn!(
-                    hostname,
+                    hostname = ?hostname,
                     bmc_ip_address = bmc_ip_str,
                     error = %e,
                     "Invalid BMC IP; skipping"
@@ -268,7 +303,10 @@ fn extract_manager_devices(
         nodes.push(ClusterNode {
             hostname,
             bmc_ip,
+            bmc_mac: None,
             rack,
+            uuid: None,
+            inventory_labels: BTreeMap::new(),
             username: username.clone(),
             password: password.clone(),
         });
@@ -276,7 +314,7 @@ fn extract_manager_devices(
 
     if nodes.is_empty() && item_count > 0 {
         return Err(HealthError::GenericError(
-            "Cluster manager getDevices returned entries but none had a recognized hostname or BMC IP; \
+            "Cluster manager getDevices returned entries but none had a recognized BMC IP; \
              probe /api on head node and update extract_manager_devices in cluster.rs"
                 .to_string(),
         ));
@@ -373,19 +411,7 @@ fn read_from_file(cfg: &ClusterEndpointSourceConfig) -> Result<Vec<ClusterNode>,
         ))
     })?;
     let inventory: FileInventory = serde_json::from_str(&contents)?;
-    let username = inventory.default_credentials.username;
-    let password = inventory.default_credentials.password;
-    Ok(inventory
-        .nodes
-        .into_iter()
-        .map(|n| ClusterNode {
-            hostname: n.hostname,
-            bmc_ip: n.bmc_ip,
-            rack: Some(n.rack).filter(|s| !s.is_empty()),
-            username: username.clone(),
-            password: password.clone(),
-        })
-        .collect())
+    Ok(inventory.into_cluster_nodes())
 }
 
 fn build_endpoints(
@@ -397,19 +423,41 @@ fn build_endpoints(
 ) -> Vec<Arc<BmcEndpoint>> {
     let mut endpoints = Vec::with_capacity(nodes.len());
     for node in nodes {
+        let identity = node
+            .hostname
+            .clone()
+            .or_else(|| node.uuid.map(|uuid| uuid.to_string()))
+            .unwrap_or_else(|| node.bmc_ip.to_string());
         let IpAddr::V4(v4) = node.bmc_ip else {
             tracing::warn!(
-                hostname = %node.hostname,
+                endpoint_identity = %identity,
                 bmc_ip_address = %node.bmc_ip,
                 "cluster endpoint has non-IPv4 BMC address; skipping"
             );
             continue;
         };
 
-        // Deterministic locally-administered MAC: 02:00:<o1>:<o2>:<o3>:<o4>.
-        // MAC is an internal cache key only; connectivity is IP-based.
-        let [o1, o2, o3, o4] = v4.octets();
-        let mac = MacAddress::new([0x02, 0x00, o1, o2, o3, o4]);
+        // Use the inventory MAC when available. Otherwise, create a deterministic
+        // locally-administered cache key: 02:00:<o1>:<o2>:<o3>:<o4>.
+        // Connectivity is IP-based in either case.
+        let mac = match node.bmc_mac.as_deref() {
+            Some(bmc_mac) => match MacAddress::from_str(bmc_mac) {
+                Ok(mac) => mac,
+                Err(error) => {
+                    tracing::warn!(
+                        endpoint_identity = %identity,
+                        bmc_mac,
+                        ?error,
+                        "Cluster endpoint has invalid BMC MAC; skipping"
+                    );
+                    continue;
+                }
+            },
+            None => {
+                let [o1, o2, o3, o4] = v4.octets();
+                MacAddress::new([0x02, 0x00, o1, o2, o3, o4])
+            }
+        };
 
         let addr = BmcAddr {
             ip: node.bmc_ip,
@@ -432,7 +480,7 @@ fn build_endpoints(
             Err(e) => {
                 tracing::warn!(
                     error = ?e,
-                    hostname = %node.hostname,
+                    endpoint_identity = %identity,
                     "Failed to construct BmcClient for cluster endpoint; skipping"
                 );
                 continue;
@@ -440,6 +488,8 @@ fn build_endpoints(
         };
         endpoints.push(Arc::new(BmcEndpoint {
             addr,
+            uuid: node.uuid,
+            inventory_labels: node.inventory_labels,
             metadata: None,
             rack_id: node.rack.as_deref().map(RackId::new),
             bmc,
@@ -451,5 +501,183 @@ fn build_endpoints(
 impl EndpointSource for ClusterEndpointSource {
     fn fetch_bmc_hosts<'a>(&'a self) -> BoxFuture<'a, Result<Vec<Arc<BmcEndpoint>>, HealthError>> {
         Box::pin(self.load_endpoints())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::endpoint::test_support::reqwest;
+
+    #[test]
+    fn file_inventory_accepts_optional_uuid() {
+        let inventory: FileInventory = serde_json::from_str(
+            r#"{
+                "default_credentials": {"username": "admin", "password": "secret"},
+                "nodes": [
+                    {
+                        "hostname": "node-01",
+                        "bmc_ip": "10.0.0.1",
+                        "bmc_mac": "aa:bb:cc:dd:ee:ff",
+                        "rack": "rack-01",
+                        "uuid": "550e8400-e29b-41d4-a716-446655440000",
+                        "labels": {
+                            "compute_zone": "az51",
+                            "node_group": "dev3-dh1"
+                        }
+                    },
+                    {
+                        "bmc_ip": "10.0.0.2",
+                        "credentials": {"username": "root", "password": "node-secret"}
+                    }
+                ]
+            }"#,
+        )
+        .expect("cluster inventory should parse");
+
+        assert_eq!(
+            inventory.nodes[0].uuid.map(|uuid| uuid.to_string()),
+            Some("550e8400-e29b-41d4-a716-446655440000".to_string())
+        );
+        assert_eq!(inventory.nodes[0].hostname.as_deref(), Some("node-01"));
+        assert_eq!(
+            inventory.nodes[0]
+                .labels
+                .get("compute_zone")
+                .map(String::as_str),
+            Some("az51")
+        );
+        assert_eq!(
+            inventory.nodes[0]
+                .labels
+                .get("node_group")
+                .map(String::as_str),
+            Some("dev3-dh1")
+        );
+        assert_eq!(
+            inventory.nodes[0].bmc_mac.as_deref(),
+            Some("aa:bb:cc:dd:ee:ff")
+        );
+        assert_eq!(inventory.nodes[1].hostname, None);
+        assert_eq!(inventory.nodes[1].bmc_mac, None);
+        assert_eq!(inventory.nodes[1].rack, None);
+        assert_eq!(inventory.nodes[1].uuid, None);
+        assert_eq!(
+            inventory.nodes[1]
+                .credentials
+                .as_ref()
+                .map(|credentials| credentials.username.as_str()),
+            Some("root")
+        );
+    }
+
+    #[test]
+    fn file_inventory_resolves_default_and_per_node_credentials() {
+        let inventory: FileInventory = serde_json::from_str(
+            r#"{
+                "default_credentials": {"username": "admin", "password": "default-secret"},
+                "nodes": [
+                    {"bmc_ip": "10.0.0.1"},
+                    {
+                        "bmc_ip": "10.0.0.2",
+                        "credentials": {"username": "root", "password": "node-secret"}
+                    }
+                ]
+            }"#,
+        )
+        .expect("cluster inventory should parse");
+
+        let nodes = inventory.into_cluster_nodes();
+        assert_eq!(nodes[0].username, "admin");
+        assert_eq!(nodes[0].password.as_deref(), Some("default-secret"));
+        assert_eq!(nodes[1].username, "root");
+        assert_eq!(nodes[1].password.as_deref(), Some("node-secret"));
+    }
+
+    #[test]
+    fn file_inventory_rejects_invalid_uuid() {
+        let result = serde_json::from_str::<FileInventory>(
+            r#"{
+                "default_credentials": {"username": "admin", "password": null},
+                "nodes": [
+                    {
+                        "bmc_ip": "10.0.0.1",
+                        "uuid": "not-a-uuid"
+                    }
+                ]
+            }"#,
+        );
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_endpoints_prefers_inventory_mac_and_falls_back_to_synthetic_mac() {
+        let inventory_mac = MacAddress::from_str("aa:bb:cc:dd:ee:ff").unwrap();
+        let inventory_uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let nodes = vec![
+            ClusterNode {
+                hostname: None,
+                bmc_ip: "10.0.0.1".parse().unwrap(),
+                bmc_mac: Some(inventory_mac.to_string()),
+                rack: None,
+                uuid: Some(inventory_uuid),
+                inventory_labels: BTreeMap::from([
+                    ("compute_zone".to_string(), "az51".to_string()),
+                    ("node_group".to_string(), "dev3-dh1".to_string()),
+                ]),
+                username: "admin".to_string(),
+                password: None,
+            },
+            ClusterNode {
+                hostname: None,
+                bmc_ip: "10.0.0.2".parse().unwrap(),
+                bmc_mac: None,
+                rack: None,
+                uuid: None,
+                inventory_labels: BTreeMap::new(),
+                username: "admin".to_string(),
+                password: None,
+            },
+        ];
+
+        let endpoints = build_endpoints(nodes, None, &reqwest(), None, 10);
+
+        assert_eq!(endpoints[0].addr.mac, inventory_mac);
+        assert_eq!(endpoints[0].uuid, Some(inventory_uuid));
+        assert_eq!(
+            endpoints[0]
+                .inventory_labels
+                .get("compute_zone")
+                .map(String::as_str),
+            Some("az51")
+        );
+        assert_eq!(
+            endpoints[0]
+                .inventory_labels
+                .get("node_group")
+                .map(String::as_str),
+            Some("dev3-dh1")
+        );
+        assert_eq!(
+            endpoints[1].addr.mac,
+            MacAddress::from_str("02:00:0a:00:00:02").unwrap()
+        );
+    }
+
+    #[test]
+    fn build_endpoints_skips_invalid_inventory_mac() {
+        let nodes = vec![ClusterNode {
+            hostname: None,
+            bmc_ip: "10.0.0.1".parse().unwrap(),
+            bmc_mac: Some("not-a-mac".to_string()),
+            rack: None,
+            uuid: None,
+            inventory_labels: BTreeMap::new(),
+            username: "admin".to_string(),
+            password: None,
+        }];
+
+        assert!(build_endpoints(nodes, None, &reqwest(), None, 10).is_empty());
     }
 }

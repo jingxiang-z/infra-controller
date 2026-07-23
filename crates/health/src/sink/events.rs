@@ -16,6 +16,7 @@
  */
 
 use std::borrow::Cow;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use carbide_uuid::machine::MachineId;
@@ -29,6 +30,7 @@ use health_report::{
 };
 use nv_redfish::resource::Health as BmcHealth;
 use serde::Serialize;
+use uuid::Uuid;
 
 use crate::endpoint::{BmcAddr, BmcEndpoint, EndpointMetadata, MachineData, SwitchEndpointRole};
 use crate::metrics::MetricLabel;
@@ -46,6 +48,8 @@ pub struct EventContext {
     pub endpoint_key: String,
     pub addr: BmcAddr,
     pub collector_type: &'static str,
+    pub uuid: Option<Uuid>,
+    pub inventory_labels: BTreeMap<String, String>,
     pub metadata: Option<EndpointMetadata>,
     pub rack_id: Option<RackId>,
 }
@@ -56,6 +60,8 @@ impl EventContext {
             endpoint_key: endpoint.key(),
             addr: endpoint.addr.clone(),
             collector_type,
+            uuid: endpoint.uuid,
+            inventory_labels: endpoint.inventory_labels.clone(),
             metadata: endpoint.metadata.clone(),
             rack_id: endpoint.rack_id.clone(),
         }
@@ -63,6 +69,16 @@ impl EventContext {
 
     pub fn endpoint_key(&self) -> &str {
         &self.endpoint_key
+    }
+
+    /// Returns the external inventory UUID for this endpoint resource.
+    pub fn resource_uuid(&self) -> Option<Uuid> {
+        self.uuid
+    }
+
+    /// Returns labels supplied by the external inventory source.
+    pub fn inventory_labels(&self) -> &BTreeMap<String, String> {
+        &self.inventory_labels
     }
 
     /// Returns machine metadata when this context belongs to a machine endpoint.
@@ -668,6 +684,8 @@ mod tests {
             endpoint_key: "00:11:22:33:44:55".to_string(),
             addr: addr(),
             collector_type: "unit-test",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata,
             rack_id: Some(RackId::new("rack-1")),
         }

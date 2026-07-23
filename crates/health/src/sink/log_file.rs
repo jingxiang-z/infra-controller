@@ -97,6 +97,10 @@ struct JsonLogRecord<'a> {
     endpoint: &'a str,
     collector: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    resource_uuid: Option<String>,
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    labels: &'a std::collections::BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     machine_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     machine_serial: Option<&'a str>,
@@ -118,6 +122,8 @@ impl<'a> JsonLogRecord<'a> {
         Self {
             endpoint: context.endpoint_key(),
             collector: context.collector_type,
+            resource_uuid: context.resource_uuid().map(|uuid| uuid.to_string()),
+            labels: context.inventory_labels(),
             machine_id: context.machine_id().map(|id| id.to_string()),
             machine_serial: context.machine_serial(),
             driver_version: context.driver_version(),
@@ -288,6 +294,8 @@ mod tests {
                 mac: MacAddress::from_str("aa:bb:cc:dd:ee:ff").unwrap(),
             },
             collector_type: "test",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: None,
         }
@@ -296,6 +304,15 @@ mod tests {
     /// Builds a log context with representative machine metadata.
     fn machine_context() -> EventContext {
         EventContext {
+            uuid: Some(
+                "550e8400-e29b-41d4-a716-446655440000"
+                    .parse()
+                    .expect("valid inventory UUID"),
+            ),
+            inventory_labels: std::collections::BTreeMap::from([
+                ("compute_zone".to_string(), "az51".to_string()),
+                ("node_group".to_string(), "dev3-dh1".to_string()),
+            ]),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: Some(
                     "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
@@ -485,6 +502,12 @@ mod tests {
             parsed["machine_id"],
             "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
         );
+        assert_eq!(
+            parsed["resource_uuid"],
+            "550e8400-e29b-41d4-a716-446655440000"
+        );
+        assert_eq!(parsed["labels"]["compute_zone"], "az51");
+        assert_eq!(parsed["labels"]["node_group"], "dev3-dh1");
         assert_eq!(parsed["machine_serial"], "MN-001");
         assert_eq!(parsed["driver_version"], "570.82");
         assert_eq!(parsed["component_type"], "compute_node");

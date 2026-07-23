@@ -59,6 +59,8 @@ pub(crate) mod test_support {
         );
         BmcEndpoint {
             addr,
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata,
             rack_id,
             bmc,

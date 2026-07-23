@@ -93,6 +93,9 @@ impl PrometheusSink {
             ),
         ];
 
+        if let Some(uuid) = context.resource_uuid() {
+            labels.push((Cow::Borrowed("resource_uuid"), uuid.to_string()));
+        }
         if let Some(machine_id) = context.machine_id() {
             labels.push((Cow::Borrowed("machine_id"), machine_id.to_string()));
         }
@@ -119,6 +122,11 @@ impl PrometheusSink {
         }
         if let Some(tray) = context.switch_tray_index() {
             labels.push((Cow::Borrowed("switch_tray_index"), tray.to_string()));
+        }
+        for (key, value) in context.inventory_labels() {
+            if !labels.iter().any(|(label, _)| label.as_ref() == key) {
+                labels.push((Cow::Owned(key.clone()), value.clone()));
+            }
         }
 
         labels
@@ -274,6 +282,15 @@ mod tests {
                 mac: MacAddress::from_str("42:9e:b1:bd:9d:dd").unwrap(),
             },
             collector_type: "sensor_collector",
+            uuid: Some(
+                "550e8400-e29b-41d4-a716-446655440000"
+                    .parse()
+                    .expect("valid inventory UUID"),
+            ),
+            inventory_labels: std::collections::BTreeMap::from([
+                ("compute_zone".to_string(), "az51".to_string()),
+                ("node_group".to_string(), "dev3-dh1".to_string()),
+            ]),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: Some(
                     "fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0"
@@ -300,6 +317,12 @@ mod tests {
             label_value("machine_id"),
             Some("fm100htjtiaehv1n5vh67tbmqq4eabcjdng40f7jupsadbedhruh6rag1l0")
         );
+        assert_eq!(
+            label_value("resource_uuid"),
+            Some("550e8400-e29b-41d4-a716-446655440000")
+        );
+        assert_eq!(label_value("compute_zone"), Some("az51"));
+        assert_eq!(label_value("node_group"), Some("dev3-dh1"));
         assert_eq!(label_value("serial_number"), Some("MN-001"));
         assert_eq!(label_value("rack_id"), Some("RACK_1"));
         assert_eq!(label_value("machine_slot_number"), Some("15"));
@@ -322,6 +345,8 @@ mod tests {
                 mac: MacAddress::from_str("11:22:33:44:55:66").unwrap(),
             },
             collector_type: "switch_collector",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Switch(SwitchData {
                 id: Some(switch_id),
                 serial: "SN-SWITCH-001".to_string(),

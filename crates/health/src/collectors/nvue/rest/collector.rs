@@ -1258,6 +1258,8 @@ mod tests {
             endpoint_key: "test-switch".to_string(),
             addr: addr.clone(),
             collector_type: COLLECTOR_NAME,
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: None,
             rack_id: None,
         };

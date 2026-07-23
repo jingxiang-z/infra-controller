@@ -280,6 +280,8 @@ mod tests {
                 mac: MacAddress::from_str("00:00:00:00:00:01").unwrap(),
             },
             collector_type: "test",
+            uuid: None,
+            inventory_labels: Default::default(),
             metadata: Some(EndpointMetadata::Machine(MachineData {
                 machine_id: Some(id),
                 machine_serial: None,

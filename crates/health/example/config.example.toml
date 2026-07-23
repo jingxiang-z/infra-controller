@@ -34,6 +34,11 @@ client_cert = "/var/run/secrets/spiffe.io/tls.crt"
 client_key = "/var/run/secrets/spiffe.io/tls.key"
 api_url = "https://carbide-api.forge-system.svc.cluster.local:1079"
 
+# Cluster inventory file entries may include an optional machine UUID.
+# See cluster-inventory.example.json for the complete file shape.
+# [endpoint_sources.cluster]
+# inventory_path = "/etc/nico-health/cluster-inventory.json"
+
 [[endpoint_sources.static_bmc_endpoints]]
 ip = "10.0.0.1"
 port = 443
