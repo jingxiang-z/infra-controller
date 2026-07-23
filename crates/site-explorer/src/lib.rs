@@ -25,7 +25,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use carbide_firmware::{FirmwareConfig, FirmwareConfigSnapshot};
+use carbide_firmware::FirmwareConfigSnapshot;
 use carbide_network::{is_locally_administered_mac, sanitized_mac};
 use carbide_redfish::libredfish::conv::IntoModel;
 use carbide_secrets::credentials::CredentialManager;
@@ -64,9 +64,12 @@ use tracing::Instrument;
 use version_compare::Cmp;
 mod endpoint_explorer;
 pub use endpoint_explorer::EndpointExplorer;
-mod endpoint_lock;
-pub use endpoint_lock::{EndpointExplorationGuard, EndpointExplorationLocks};
+mod endpoint_exploration_service;
+pub use endpoint_exploration_service::{
+    EndpointExplorationService, EndpointExplorationServiceError,
+};
 mod credentials;
+mod endpoint_lock;
 mod metrics;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
@@ -342,10 +345,8 @@ pub struct SiteExplorer {
     config: SiteExplorerConfig,
     metric_holder: Arc<metrics::MetricHolder>,
     endpoint_explorer: Arc<dyn EndpointExplorer>,
-    firmware_config: Arc<FirmwareConfig>,
+    endpoint_exploration_service: Arc<EndpointExplorationService>,
     work_lock_manager_handle: WorkLockManagerHandle,
-    /// Per-endpoint, in-process exploration locks shared with the API's ad-hoc refresh handler.
-    endpoint_exploration_locks: EndpointExplorationLocks,
     machine_creator: MachineCreator,
     switch_creator: SwitchCreator,
     boot_order_tracker: BootOrderTracker,
@@ -364,11 +365,9 @@ impl SiteExplorer {
         database_connection: sqlx::PgPool,
         explorer_config: SiteExplorerConfig,
         meter: opentelemetry::metrics::Meter,
-        endpoint_explorer: Arc<dyn EndpointExplorer>,
-        firmware_config: Arc<FirmwareConfig>,
+        endpoint_exploration_service: Arc<EndpointExplorationService>,
         common_pools: Arc<CommonPools>,
         work_lock_manager_handle: WorkLockManagerHandle,
-        endpoint_exploration_locks: EndpointExplorationLocks,
         rack_profiles: RackProfileConfig,
         rms_client: Option<Arc<dyn RmsApi>>,
         credential_manager: Arc<dyn CredentialManager>,
@@ -386,6 +385,7 @@ impl SiteExplorer {
             &explorer_config,
         ));
         let rack_profiles = Arc::new(rack_profiles);
+        let endpoint_explorer = endpoint_exploration_service.endpoint_explorer();
 
         SiteExplorer {
             machine_creator: MachineCreator::new(
@@ -404,9 +404,8 @@ impl SiteExplorer {
             config: explorer_config,
             metric_holder,
             endpoint_explorer,
-            firmware_config,
+            endpoint_exploration_service,
             work_lock_manager_handle,
-            endpoint_exploration_locks,
             boot_order_tracker: BootOrderTracker::default(),
             recent_bmc_resets: RecentBmcResets::default(),
         }
@@ -425,15 +424,6 @@ impl SiteExplorer {
             .spawn(async move { self.run(cancel_token).await })?;
 
         Ok(())
-    }
-
-    async fn firmware_config_snapshot(&self) -> SiteExplorerResult<FirmwareConfigSnapshot> {
-        let host_firmware_configs =
-            db::host_firmware_config::list_configs(&self.database_connection).await?;
-
-        Ok(self
-            .firmware_config
-            .create_snapshot_with_overrides(host_firmware_configs))
     }
 
     async fn run(&mut self, cancel_token: CancellationToken) {
@@ -2306,12 +2296,15 @@ impl SiteExplorer {
         // the number of expected machines we've actually "seen."
         metrics.endpoint_explorations_expected_machines_missing_overall_count =
             expected_count - index.all_matched_expected_machines().len();
-        let fw_config_snapshot = Arc::new(self.firmware_config_snapshot().await?);
+        let fw_config_snapshot = Arc::new(
+            self.endpoint_exploration_service
+                .firmware_config_snapshot()
+                .await?,
+        );
 
         let probe_start = Instant::now();
         for endpoint in explore_endpoint_data.into_iter() {
-            let endpoint_explorer = self.endpoint_explorer.clone();
-            let endpoint_exploration_locks = self.endpoint_exploration_locks.clone();
+            let endpoint_exploration_service = self.endpoint_exploration_service.clone();
             let concurrency_limiter = concurrency_limiter.clone();
 
             let bmc_target_port = self.config.override_target_port.unwrap_or(443);
@@ -2334,23 +2327,8 @@ impl SiteExplorer {
                         .await
                         .expect("Semaphore can't be closed");
 
-                    // If an ad-hoc refresh or another periodic task is already exploring this
-                    // endpoint, skip it for this iteration.
-                    let _endpoint_guard =
-                        match endpoint_exploration_locks.try_claim(endpoint.address) {
-                            Some(guard) => guard,
-                            None => {
-                                tracing::info!(
-                                    bmc_ip_address = %endpoint.address,
-                                    "Skipping periodic endpoint exploration; endpoint already in progress"
-                                );
-                                return Ok(None);
-                            }
-                        };
-
-                    let redfish_explore_start = Instant::now();
-                    let mut result = endpoint_explorer
-                        .explore_endpoint(
+                    let Some(probe) = endpoint_exploration_service
+                        .try_explore_endpoint(
                             bmc_target_addr,
                             endpoint.iface,
                             endpoint.expected,
@@ -2359,8 +2337,16 @@ impl SiteExplorer {
                                 .and_then(|e| e.report.last_exploration_error.as_ref()),
                             endpoint.last_explored.and_then(|e| e.boot_interface_mac),
                         )
-                        .await;
-                    steps.redfish_explore = redfish_explore_start.elapsed();
+                        .await
+                    else {
+                        tracing::info!(
+                            bmc_ip_address = %endpoint.address,
+                            "Skipping periodic endpoint exploration; endpoint already in progress"
+                        );
+                        return Ok(None);
+                    };
+                    steps.redfish_explore = probe.redfish_explore_duration;
+                    let mut result = probe.result;
 
                     if let Err(error) = &result {
                         // For logging purposes
