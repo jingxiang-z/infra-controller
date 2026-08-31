@@ -15,7 +15,6 @@
  * limitations under the License.
  */
 
-use std::borrow::Cow;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -25,7 +24,7 @@ use prometheus::{Counter, CounterVec, Opts};
 
 use super::dedup_queue::{DedupQueue, SaveOutcome};
 use super::event_mapper::RedfishEventMapper;
-use super::{CollectorEvent, DataSink, EventContext, LogRecord, LogSeverity, MetricSample};
+use super::{CollectorEvent, DataSink, EventContext, LogRecord, MetricSample};
 use crate::HealthError;
 use crate::config::OtlpTargetConfig;
 use crate::metrics::MetricsManager;
@@ -88,51 +87,6 @@ fn metric_queue_key(context: &EventContext, sample: &MetricSample) -> OtlpMetric
         metric_type: sample.metric_type.clone(),
         unit: sample.unit.clone(),
     }
-}
-
-fn metric_label<'a>(sample: &'a MetricSample, name: &str) -> Option<&'a str> {
-    sample
-        .labels
-        .iter()
-        .find_map(|(key, value)| (key.as_ref() == name).then_some(value.as_str()))
-}
-
-/// Builds one deduplicated OTLP log record carrying the identity of the GPU
-/// associated with a metric sample.
-fn gpu_identity_log(sample: &MetricSample) -> Option<(String, CollectorEvent)> {
-    if metric_label(sample, "processor_type") != Some("gpu") {
-        return None;
-    }
-
-    let identity = metric_label(sample, "processor_id")
-        .or_else(|| metric_label(sample, "gpu_uuid"))
-        .unwrap_or(&sample.key)
-        .to_string();
-    let mut attributes = vec![
-        (Cow::Borrowed("event.type"), "gpu_identity".to_string()),
-        (Cow::Borrowed("processor_type"), "gpu".to_string()),
-    ];
-    for (source, target) in [
-        ("processor_id", "processor_id"),
-        ("system_id", "system_id"),
-        ("gpu_uuid", "gpu_uuid"),
-        ("gpu_serial_number", "gpu_serial_number"),
-        ("model", "gpu_model"),
-    ] {
-        if let Some(value) = metric_label(sample, source) {
-            attributes.push((Cow::Borrowed(target), value.to_string()));
-        }
-    }
-
-    Some((
-        identity,
-        CollectorEvent::Log(Box::new(LogRecord {
-            body: "GPU identity observed".to_string(),
-            severity: LogSeverity::Info,
-            attributes,
-            diagnostic_record: None,
-        })),
-    ))
 }
 
 impl OtlpSink {
@@ -316,12 +270,6 @@ impl DataSink for OtlpSink {
                 .save_latest(key, (context.clone(), (**sample).clone()));
 
             self.record_save_outcome(outcome, OtlpSignal::Metrics);
-
-            if let Some((identity, log)) = gpu_identity_log(sample) {
-                let key = format!("{}|gpu_identity|{identity}", context.endpoint_key);
-                let outcome = self.queue.save_latest(key, (context.clone(), log));
-                self.record_save_outcome(outcome, OtlpSignal::Logs);
-            }
 
             return Ok(());
         }
@@ -520,31 +468,6 @@ mod tests {
         }))
     }
 
-    fn gpu_metric_event() -> CollectorEvent {
-        CollectorEvent::Metric(Box::new(MetricSample {
-            key: "/redfish/v1/Systems/SYS0/Processors/GPU0/bandwidth".to_string(),
-            name: "hw_metric".to_string(),
-            metric_type: "bandwidth".to_string(),
-            unit: "percent".to_string(),
-            value: 55.0,
-            labels: vec![
-                (Cow::Borrowed("processor_id"), "GPU0".to_string()),
-                (Cow::Borrowed("system_id"), "SYS0".to_string()),
-                (Cow::Borrowed("processor_type"), "gpu".to_string()),
-                (Cow::Borrowed("model"), "NVIDIA GB100".to_string()),
-                (
-                    Cow::Borrowed("gpu_uuid"),
-                    "01234567-89ab-cdef-0123-456789abcdef".to_string(),
-                ),
-                (
-                    Cow::Borrowed("gpu_serial_number"),
-                    "GPU-SN-0001".to_string(),
-                ),
-            ],
-            context: None,
-        }))
-    }
-
     fn test_sink() -> OtlpSink {
         OtlpSink::new_for_bench_with_diagnostics(Arc::new(OpenBmcEventMapper), false)
     }
@@ -584,41 +507,6 @@ mod tests {
             sink.metrics_queue.pop().is_some(),
             "metrics queue should have the sample"
         );
-    }
-
-    #[test]
-    fn gpu_metric_events_add_identity_to_metrics_and_logs_queues() {
-        let sink = test_sink();
-        let ctx = test_context();
-        sink.handle_event(&ctx, &gpu_metric_event());
-
-        assert!(
-            sink.metrics_queue.pop().is_some(),
-            "metrics queue should retain the GPU sample"
-        );
-        let (_, (_, event)) = sink
-            .queue
-            .pop()
-            .expect("logs queue should contain GPU identity");
-        let CollectorEvent::Log(log) = event else {
-            panic!("GPU identity should be represented as a log event");
-        };
-        let attribute = |name: &str| {
-            log.attributes
-                .iter()
-                .find_map(|(key, value)| (key.as_ref() == name).then_some(value.as_str()))
-        };
-
-        assert_eq!(log.body, "GPU identity observed");
-        assert_eq!(attribute("event.type"), Some("gpu_identity"));
-        assert_eq!(attribute("processor_id"), Some("GPU0"));
-        assert_eq!(attribute("system_id"), Some("SYS0"));
-        assert_eq!(
-            attribute("gpu_uuid"),
-            Some("01234567-89ab-cdef-0123-456789abcdef")
-        );
-        assert_eq!(attribute("gpu_serial_number"), Some("GPU-SN-0001"));
-        assert_eq!(attribute("gpu_model"), Some("NVIDIA GB100"));
     }
 
     #[test]
