@@ -26,12 +26,13 @@ use crate::collectors::{
     AutoFailureBudget, BackoffConfig, BudgetDecision, Collector, CollectorStartContext,
     EntityDiscoveryCollector, EntityDiscoveryCollectorConfig, FailureKind, FirmwareCollector,
     FirmwareCollectorConfig, GpuInventoryCollector, GpuInventoryCollectorConfig,
-    LeakDetectorCollector, LeakDetectorCollectorConfig, LogsCollector, LogsCollectorConfig,
-    MetricsCollector, MetricsCollectorConfig, NmxcCollector, NmxcCollectorConfig,
-    NmxcSchemaOverrideCollector, NmxcSchemaOverrideCollectorConfig, NmxtCollector,
-    NmxtCollectorConfig, NvueRestCollector, NvueRestCollectorConfig, SensorCollector,
-    SensorCollectorConfig, SseLogCollector, SseLogCollectorConfig, StreamingCollectorStartContext,
-    TelemetryCollector, TelemetryCollectorConfig, spawn_gnmi_collector,
+    InventorySseLogCollector, InventorySseLogCollectorConfig, LeakDetectorCollector,
+    LeakDetectorCollectorConfig, LogsCollector, LogsCollectorConfig, MetricsCollector,
+    MetricsCollectorConfig, NmxcCollector, NmxcCollectorConfig, NmxcSchemaOverrideCollector,
+    NmxcSchemaOverrideCollectorConfig, NmxtCollector, NmxtCollectorConfig, NvueRestCollector,
+    NvueRestCollectorConfig, SensorCollector, SensorCollectorConfig, SseLogCollectorConfig,
+    StreamingCollectorStartContext, TelemetryCollector, TelemetryCollectorConfig,
+    spawn_gnmi_collector,
 };
 use crate::config::{
     Configurable, LogCollectionMode, NmxcCollectorConfig as NmxcCollectorOptions, PeriodicLogConfig,
@@ -177,16 +178,20 @@ fn spawn_generic_redfish_collectors(
 
     let sensors_enabled = matches!(ctx.sensors_config, Configurable::Enabled(_));
     let metrics_enabled = matches!(ctx.metrics_config, Configurable::Enabled(_));
-    // The GPU inventory collector reads GPU counts from the shared entity
-    // inventory, so entity discovery must also run wherever it does — even if
-    // sensors/metrics are disabled. Mirror the GPU collector's own spawn gate
-    // (enabled + API client present + machine endpoint) so discovery starts for
-    // exactly those endpoints and not for switches / power shelves.
+    let sse_logs_enabled = data_sink.is_some()
+        && ctx.logs_config.as_option().is_some_and(|config| {
+            matches!(config.mode, LogCollectionMode::Sse)
+                || matches!(config.mode, LogCollectionMode::Auto)
+                    && !ctx.log_downgrade_registry.is_downgraded(&key)
+        });
+    // GPU inventory and SSE log enrichment read the shared entity inventory,
+    // so entity discovery must run for those collectors even when sensor and
+    // entity-metric collection are disabled.
     let gpu_inventory_enabled = matches!(ctx.gpu_inventory_config, Configurable::Enabled(_))
         && ctx.api_client.is_some()
         && matches!(endpoint.metadata, Some(EndpointMetadata::Machine(_)));
 
-    if (sensors_enabled || metrics_enabled || gpu_inventory_enabled)
+    if (sensors_enabled || metrics_enabled || gpu_inventory_enabled || sse_logs_enabled)
         && !ctx.collectors.contains(CollectorKind::Discovery, &key)
     {
         let shared = ctx.collectors.inventory_for(&key);
@@ -368,6 +373,7 @@ fn spawn_generic_redfish_collectors(
         );
 
         let sse_cfg = logs_cfg.sse_or_default();
+        let shared = ctx.collectors.inventory_for(&key);
         let sse_backoff_config = || BackoffConfig {
             initial: sse_cfg.initial_backoff,
             max: sse_cfg.max_backoff,
@@ -403,12 +409,18 @@ fn spawn_generic_redfish_collectors(
         let result = match logs_cfg.mode {
             LogCollectionMode::Sse => {
                 if let Some(data_sink) = data_sink.clone() {
-                    Some(Collector::start_streaming::<SseLogCollector<BmcClient>, _>(
+                    Some(Collector::start_streaming::<
+                        InventorySseLogCollector<BmcClient>,
+                        _,
+                    >(
                         endpoint_arc.clone(),
                         bmc.clone(),
-                        SseLogCollectorConfig {
-                            include_diagnostics: ctx.logs_include_diagnostics,
-                            request_concurrency: ctx.bmc_request_concurrency,
+                        InventorySseLogCollectorConfig {
+                            config: SseLogCollectorConfig {
+                                include_diagnostics: ctx.logs_include_diagnostics,
+                                request_concurrency: ctx.bmc_request_concurrency,
+                            },
+                            shared: Arc::clone(&shared),
                         },
                         data_sink,
                         StreamingCollectorStartContext {
@@ -446,12 +458,18 @@ fn spawn_generic_redfish_collectors(
                     let endpoint_rack_id = endpoint.rack_id.clone();
                     let mut budget = AutoFailureBudget::new(auto_cfg, Instant::now());
 
-                    Some(Collector::start_streaming::<SseLogCollector<BmcClient>, _>(
+                    Some(Collector::start_streaming::<
+                        InventorySseLogCollector<BmcClient>,
+                        _,
+                    >(
                         endpoint_arc.clone(),
                         bmc.clone(),
-                        SseLogCollectorConfig {
-                            include_diagnostics: ctx.logs_include_diagnostics,
-                            request_concurrency: ctx.bmc_request_concurrency,
+                        InventorySseLogCollectorConfig {
+                            config: SseLogCollectorConfig {
+                                include_diagnostics: ctx.logs_include_diagnostics,
+                                request_concurrency: ctx.bmc_request_concurrency,
+                            },
+                            shared: Arc::clone(&shared),
                         },
                         data_sink,
                         StreamingCollectorStartContext {
@@ -1424,6 +1442,7 @@ mod tests {
         .expect("spawn should succeed");
 
         assert_eq!(ctx.collectors.len(CollectorKind::Logs), 1);
+        assert_eq!(ctx.collectors.len(CollectorKind::Discovery), 1);
     }
 
     #[tokio::test]

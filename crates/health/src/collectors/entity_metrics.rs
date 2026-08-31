@@ -1723,6 +1723,8 @@ mod tests {
                                 ("system_id", "SYS0"),
                                 ("processor_type", "gpu"),
                                 ("model", "NVIDIA GB100"),
+                                ("gpu_uuid", "01234567-89ab-cdef-0123-456789abcdef"),
+                                ("gpu_serial_number", "GPU-SN-0001"),
                             ];
                             const PREFIX: &str = "/redfish/v1/Systems/SYS0/Processors/GPU0";
                             // The standard projection runs first, then the

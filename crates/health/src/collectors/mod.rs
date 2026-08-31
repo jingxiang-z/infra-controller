@@ -44,6 +44,7 @@ pub use logs::{
     DowngradeEvent, DowngradeReason, LogDowngradeRegistry, LogsCollector, LogsCollectorConfig,
     SseLogCollector, SseLogCollectorConfig,
 };
+pub(crate) use logs::{InventorySseLogCollector, InventorySseLogCollectorConfig};
 pub use nmxc::{NmxcCollector, NmxcCollectorConfig};
 pub(crate) use nmxc_schema_override::{
     NmxcSchemaOverride, NmxcSchemaOverrideCollector, NmxcSchemaOverrideCollectorConfig,

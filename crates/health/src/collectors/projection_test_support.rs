@@ -335,6 +335,8 @@ fn mock_resources() -> HashMap<String, MockResponse> {
         json!({
             "ProcessorType": "GPU",
             "Model": "NVIDIA GB100",
+            "UUID": "01234567-89ab-cdef-0123-456789abcdef",
+            "SerialNumber": "GPU-SN-0001",
             "Metrics": reference(&gpu_metrics)
         }),
     );
