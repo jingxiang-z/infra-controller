@@ -34,6 +34,7 @@ use super::redfish::{
     nvidia_error_id, redfish_event_type_string, redfish_log_type,
 };
 use crate::HealthError;
+use crate::collectors::inventory::{EntityInventory, SharedInventory};
 use crate::collectors::runtime::{
     EventStream, StreamingCollector, StreamingConnectResult, open_sse_stream,
 };
@@ -82,6 +83,7 @@ pub struct SseLogCollector<B: Bmc> {
     bmc: Arc<B>,
     include_diagnostics: bool,
     request_concurrency: usize,
+    shared: SharedInventory<B>,
 }
 
 #[async_trait]
@@ -97,6 +99,7 @@ impl<B: Bmc + 'static> StreamingCollector<B> for SseLogCollector<B> {
             bmc,
             include_diagnostics: config.include_diagnostics,
             request_concurrency: config.request_concurrency.get(),
+            shared: Arc::new(arc_swap::ArcSwapOption::empty()),
         })
     }
 
@@ -108,6 +111,7 @@ impl<B: Bmc + 'static> StreamingCollector<B> for SseLogCollector<B> {
             Arc::clone(&self.bmc),
             self.include_diagnostics,
             self.request_concurrency,
+            Arc::clone(&self.shared),
         );
 
         Ok(StreamingConnectResult::Connected(event_stream))
@@ -118,11 +122,45 @@ impl<B: Bmc + 'static> StreamingCollector<B> for SseLogCollector<B> {
     }
 }
 
+pub(crate) struct InventorySseLogCollectorConfig<B: Bmc> {
+    pub(crate) config: SseLogCollectorConfig,
+    pub(crate) shared: SharedInventory<B>,
+}
+
+pub(crate) struct InventorySseLogCollector<B: Bmc>(SseLogCollector<B>);
+
+#[async_trait]
+impl<B: Bmc + 'static> StreamingCollector<B> for InventorySseLogCollector<B> {
+    type Config = InventorySseLogCollectorConfig<B>;
+
+    fn new_runner(
+        bmc: Arc<B>,
+        _endpoint: Arc<BmcEndpoint>,
+        config: Self::Config,
+    ) -> Result<Self, HealthError> {
+        Ok(Self(SseLogCollector {
+            bmc,
+            include_diagnostics: config.config.include_diagnostics,
+            request_concurrency: config.config.request_concurrency.get(),
+            shared: config.shared,
+        }))
+    }
+
+    async fn connect(&mut self) -> Result<StreamingConnectResult<'_>, HealthError> {
+        self.0.connect().await
+    }
+
+    fn collector_type(&self) -> &'static str {
+        self.0.collector_type()
+    }
+}
+
 fn map_event_stream<'a, B, S>(
     sse_stream: S,
     bmc: Arc<B>,
     include_diagnostics: bool,
     request_concurrency: usize,
+    shared: SharedInventory<B>,
 ) -> EventStream<'a>
 where
     B: Bmc + 'static,
@@ -134,12 +172,14 @@ where
         .map(move |result| {
             let bmc = Arc::clone(&bmc);
             let fetch_permits = Arc::clone(&fetch_permits);
+            let shared = Arc::clone(&shared);
             async move {
                 map_payload(
                     result,
                     bmc.as_ref(),
                     include_diagnostics,
                     fetch_permits.as_ref(),
+                    &shared,
                 )
                 .await
             }
@@ -154,6 +194,7 @@ async fn map_payload<B: Bmc>(
     bmc: &B,
     include_diagnostics: bool,
     fetch_permits: &Semaphore,
+    shared: &SharedInventory<B>,
 ) -> Vec<Result<CollectorEvent, HealthError>> {
     match result {
         Ok(EventStreamPayload::Event(event)) => {
@@ -162,6 +203,7 @@ async fn map_payload<B: Bmc>(
                 bmc,
                 include_diagnostics,
                 fetch_permits,
+                shared,
                 EVENT_RECORD_RESOLUTION_TIMEOUT,
             )
             .await
@@ -177,6 +219,7 @@ async fn event_to_logs<B: Bmc>(
     bmc: &B,
     include_diagnostics: bool,
     fetch_permits: &Semaphore,
+    shared: &SharedInventory<B>,
     resolution_timeout: Duration,
 ) -> Vec<Result<CollectorEvent, HealthError>> {
     let deadline = tokio::time::Instant::now() + resolution_timeout;
@@ -190,8 +233,39 @@ async fn event_to_logs<B: Bmc>(
     .await
     .into_iter()
     .flatten()
-    .map(|record| Ok(record_to_log(&record, include_diagnostics)))
+    .map(|record| {
+        let mut event = record_to_log(&record, include_diagnostics);
+        let gpu_attributes = gpu_identity_attributes(&record, shared.load_full().as_deref());
+        let CollectorEvent::Log(log) = &mut event else {
+            unreachable!("record_to_log always returns a log event");
+        };
+        log.attributes.extend(gpu_attributes);
+        Ok(event)
+    })
     .collect()
+}
+
+fn gpu_identity_attributes<B: Bmc>(
+    record: &nv_redfish::schema::event::EventRecord,
+    inventory: Option<&EntityInventory<B>>,
+) -> Vec<crate::metrics::MetricLabel> {
+    let Some(origin) = record
+        .origin_of_condition
+        .as_ref()
+        .map(|origin| origin.odata_id.to_string())
+    else {
+        return Vec::new();
+    };
+    let Some(inventory) = inventory else {
+        return Vec::new();
+    };
+
+    inventory
+        .entities
+        .iter()
+        .find(|entity| entity.matches_redfish_origin(&origin))
+        .and_then(|entity| entity.gpu_identity_attributes())
+        .unwrap_or_default()
 }
 
 async fn resolve_event_record<B: Bmc>(
@@ -371,6 +445,7 @@ fn record_to_log(
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Instant;
 
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
@@ -383,6 +458,7 @@ mod tests {
     use url::Url;
 
     use super::*;
+    use crate::collectors::projection_test_support::{ProjectionFixture, TestEntity};
     use crate::endpoint::test_support::{mac, test_endpoint};
     use crate::sink::LogSeverity;
 
@@ -393,11 +469,13 @@ mod tests {
         resolution_timeout: Duration,
     ) -> Vec<Result<CollectorEvent, HealthError>> {
         let fetch_permits = Semaphore::new(event.events.len().max(1));
+        let shared = Arc::new(arc_swap::ArcSwapOption::empty());
         event_to_logs(
             event,
             bmc,
             include_diagnostics,
             &fetch_permits,
+            &shared,
             resolution_timeout,
         )
         .await
@@ -428,7 +506,15 @@ mod tests {
         let endpoint = test_endpoint(mac("00:11:22:33:44:55"));
 
         let fetch_permits = Semaphore::new(1);
-        let events = map_payload(Ok(payload), endpoint.bmc().as_ref(), false, &fetch_permits).await;
+        let shared = Arc::new(arc_swap::ArcSwapOption::empty());
+        let events = map_payload(
+            Ok(payload),
+            endpoint.bmc().as_ref(),
+            false,
+            &fetch_permits,
+            &shared,
+        )
+        .await;
 
         let [Ok(CollectorEvent::Log(record))] = events.as_slice() else {
             panic!("expected one SSE log record");
@@ -504,6 +590,38 @@ mod tests {
             .iter()
             .find(|(candidate, _)| candidate.as_ref() == key)
             .map(|(_, value)| value.as_str())
+    }
+
+    #[tokio::test]
+    async fn gpu_origin_enriches_sse_log_attributes() {
+        let fixture = ProjectionFixture::new().await;
+        let inventory = EntityInventory {
+            entities: vec![fixture.entity(TestEntity::NvidiaGpuProcessor).await],
+            discovered_at: Instant::now(),
+            generation: 1,
+        };
+        let mut payload = c12_platform_record("/redfish/v1/EventService/Events/records/1");
+        payload["OriginOfCondition"] = json!({
+            "@odata.id": "/redfish/v1/Systems/SYS0/Processors/GPU0"
+        });
+        let event_record = serde_json::from_value(payload).expect("valid GPU event record");
+
+        let gpu_attributes = gpu_identity_attributes(&event_record, Some(&inventory));
+        let mut event = record_to_log(&event_record, false);
+        let CollectorEvent::Log(record) = &mut event else {
+            unreachable!("record_to_log always returns a log event");
+        };
+        record.attributes.extend(gpu_attributes);
+
+        assert_eq!(attribute(record, "processor_id"), Some("GPU0"));
+        assert_eq!(attribute(record, "system_id"), Some("SYS0"));
+        assert_eq!(attribute(record, "processor_type"), Some("gpu"));
+        assert_eq!(attribute(record, "model"), Some("NVIDIA GB100"));
+        assert_eq!(
+            attribute(record, "gpu_uuid"),
+            Some("01234567-89ab-cdef-0123-456789abcdef")
+        );
+        assert_eq!(attribute(record, "gpu_serial_number"), Some("GPU-SN-0001"));
     }
 
     #[tokio::test]
@@ -692,6 +810,7 @@ mod tests {
         let event = referenced_event(&[first_path, second_path]);
         let fetch_permits = Arc::new(Semaphore::new(1));
         let task_permits = Arc::clone(&fetch_permits);
+        let shared = Arc::new(arc_swap::ArcSwapOption::empty());
 
         let task = tokio::spawn(async move {
             event_to_logs(
@@ -699,6 +818,7 @@ mod tests {
                 &bmc,
                 false,
                 task_permits.as_ref(),
+                &shared,
                 Duration::from_secs(1),
             )
             .await
@@ -771,7 +891,13 @@ mod tests {
             Ok(EventStreamPayload::Event(referenced_event(&[hung_path]))),
             Ok(EventStreamPayload::Event(referenced_event(&[good_path]))),
         ]);
-        let mut event_stream = map_event_stream(sse_stream, bmc, false, 2);
+        let mut event_stream = map_event_stream(
+            sse_stream,
+            bmc,
+            false,
+            2,
+            Arc::new(arc_swap::ArcSwapOption::empty()),
+        );
         let next_event = tokio::spawn(async move { event_stream.next().await });
 
         tokio::time::timeout(Duration::from_secs(1), good_request_started.notified())

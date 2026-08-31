@@ -25,4 +25,5 @@ mod sse;
 
 pub use downgrade::{DowngradeEvent, DowngradeReason, LogDowngradeRegistry};
 pub use periodic::{LogsCollector, LogsCollectorConfig};
+pub(crate) use sse::{InventorySseLogCollector, InventorySseLogCollectorConfig};
 pub use sse::{SseLogCollector, SseLogCollectorConfig};

@@ -201,6 +201,35 @@ impl<B: Bmc> DiscoveredEntity<B> {
         }
     }
 
+    /// Returns whether a Redfish event origin identifies this entity or one of
+    /// the sensors discovered through it.
+    pub(crate) fn matches_redfish_origin(&self, origin: &str) -> bool {
+        self.key() == origin
+            || self
+                .sensors()
+                .iter()
+                .any(|sensor| sensor.odata_id().to_string() == origin)
+    }
+
+    /// Returns the identity labels for a GPU Processor entity.
+    pub(crate) fn gpu_identity_attributes(&self) -> Option<Vec<MetricLabel>> {
+        let DiscoveredEntity::Processor { entity, .. } = self else {
+            return None;
+        };
+        if !entity
+            .raw()
+            .processor_type
+            .flatten()
+            .is_some_and(|value| value.to_snake_case() == "gpu")
+        {
+            return None;
+        }
+
+        let mut attributes = self.base_attributes();
+        attributes.extend(self.entity_specific_attributes());
+        Some(attributes)
+    }
+
     pub(crate) fn derived_metrics(&self) -> Vec<DerivedMetric> {
         match self {
             DiscoveredEntity::Drive { entity, .. } => entity
@@ -508,6 +537,48 @@ mod tests {
                 },
             ],
             observe,
+        );
+    }
+
+    #[tokio::test]
+    async fn gpu_identity_origin_cases() {
+        let fixture = ProjectionFixture::new().await;
+        let gpu_origin = "/redfish/v1/Systems/SYS0/Processors/GPU0";
+        let cpu_origin = "/redfish/v1/Systems/SYS0/Processors/CPU0";
+
+        check_values(
+            [
+                Check {
+                    scenario: "GPU Processor origin",
+                    input: (
+                        fixture.entity(TestEntity::NvidiaGpuProcessor).await,
+                        gpu_origin,
+                    ),
+                    expect: Some("01234567-89ab-cdef-0123-456789abcdef".to_string()),
+                },
+                Check {
+                    scenario: "CPU Processor origin",
+                    input: (fixture.entity(TestEntity::Processor).await, cpu_origin),
+                    expect: None,
+                },
+                Check {
+                    scenario: "unrelated origin",
+                    input: (
+                        fixture.entity(TestEntity::NvidiaGpuProcessor).await,
+                        cpu_origin,
+                    ),
+                    expect: None,
+                },
+            ],
+            |(entity, origin)| {
+                if !entity.matches_redfish_origin(origin) {
+                    return None;
+                }
+                entity
+                    .gpu_identity_attributes()?
+                    .into_iter()
+                    .find_map(|(key, value)| (key == "gpu_uuid").then_some(value))
+            },
         );
     }
 }
