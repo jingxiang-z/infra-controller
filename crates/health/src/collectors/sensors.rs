@@ -897,6 +897,43 @@ mod tests {
                     }),
                 },
                 Case {
+                    scenario: "GPU identity labels",
+                    input: ProjectionInput {
+                        sensor: sensor_json(),
+                        entity_type: "processor",
+                        physical_context_fallback: "gpu",
+                        base_attributes: vec![("processor_id", "GPU0"), ("system_id", "SYS0")],
+                        entity_attributes: vec![
+                            ("processor_type", "gpu"),
+                            ("model", "NVIDIA GB100"),
+                            ("gpu_uuid", "01234567-89ab-cdef-0123-456789abcdef"),
+                            ("gpu_serial_number", "GPU-SN-0001"),
+                        ],
+                        include_sensor_thresholds: false,
+                    },
+                    expect: Yields(ObservedProjection {
+                        primary: observed_metric(
+                            SENSOR_PATH,
+                            "hw_sensor",
+                            "temperature",
+                            "celsius",
+                            42.5,
+                            &[
+                                ("processor_id", "GPU0"),
+                                ("system_id", "SYS0"),
+                                ("sensor_name", "Sensor0"),
+                                ("physical_context", "gpu"),
+                                ("processor_type", "gpu"),
+                                ("model", "NVIDIA GB100"),
+                                ("gpu_uuid", "01234567-89ab-cdef-0123-456789abcdef"),
+                                ("gpu_serial_number", "GPU-SN-0001"),
+                            ],
+                            Some(empty_context("processor", "Sensor0", "ok")),
+                        ),
+                        ranges: Vec::new(),
+                    }),
+                },
+                Case {
                     scenario: "threshold labels and range metrics",
                     input: ProjectionInput {
                         sensor: threshold_sensor_json(),

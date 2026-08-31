@@ -85,6 +85,15 @@ impl<B: Bmc> DiscoveredEntity<B> {
 
     pub(crate) fn physical_context_fallback(&self) -> &'static str {
         match self {
+            DiscoveredEntity::Processor { entity, .. }
+                if entity
+                    .raw()
+                    .processor_type
+                    .flatten()
+                    .is_some_and(|value| value.to_snake_case() == "gpu") =>
+            {
+                "gpu"
+            }
             DiscoveredEntity::Processor { .. } => "cpu",
             DiscoveredEntity::Memory { .. } => "memory",
             DiscoveredEntity::Drive { .. } => "storage_device",
@@ -132,14 +141,24 @@ impl<B: Bmc> DiscoveredEntity<B> {
         let mut attrs = Vec::new();
         match self {
             DiscoveredEntity::Processor { entity, .. } => {
-                if let Some(processor_type) = entity.raw().processor_type.flatten() {
+                let raw = entity.raw();
+                let processor_type = raw.processor_type.flatten();
+                if let Some(processor_type) = processor_type {
                     attrs.push((
                         Cow::Borrowed("processor_type"),
                         processor_type.to_snake_case().to_string(),
                     ));
                 }
-                if let Some(model) = entity.raw().model.clone().flatten() {
+                if let Some(model) = raw.model.clone().flatten() {
                     attrs.push((Cow::Borrowed("model"), model));
+                }
+                if processor_type.is_some_and(|value| value.to_snake_case() == "gpu") {
+                    if let Some(uuid) = raw.uuid.flatten() {
+                        attrs.push((Cow::Borrowed("gpu_uuid"), uuid.to_string()));
+                    }
+                    if let Some(serial_number) = raw.serial_number.clone().flatten() {
+                        attrs.push((Cow::Borrowed("gpu_serial_number"), serial_number));
+                    }
                 }
             }
             DiscoveredEntity::Memory { entity, .. } => {
@@ -318,6 +337,30 @@ mod tests {
                         ],
                         entity_specific_attributes: vec![],
                         key: "/redfish/v1/Systems/SYS0/Processors/CPU-sparse".to_string(),
+                        derived_metrics: vec![],
+                    },
+                },
+                Check {
+                    scenario: "GPU processor identity",
+                    input: fixture.entity(TestEntity::NvidiaGpuProcessor).await,
+                    expect: ObservedEntity {
+                        sensor_ids: vec![],
+                        entity_type: "processor",
+                        physical_context: "gpu",
+                        base_attributes: vec![
+                            ("processor_id".to_string(), "GPU0".to_string()),
+                            ("system_id".to_string(), "SYS0".to_string()),
+                        ],
+                        entity_specific_attributes: vec![
+                            ("processor_type".to_string(), "gpu".to_string()),
+                            ("model".to_string(), "NVIDIA GB100".to_string()),
+                            (
+                                "gpu_uuid".to_string(),
+                                "01234567-89ab-cdef-0123-456789abcdef".to_string(),
+                            ),
+                            ("gpu_serial_number".to_string(), "GPU-SN-0001".to_string()),
+                        ],
+                        key: "/redfish/v1/Systems/SYS0/Processors/GPU0".to_string(),
                         derived_metrics: vec![],
                     },
                 },

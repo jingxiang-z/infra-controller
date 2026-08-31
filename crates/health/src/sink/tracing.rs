@@ -63,12 +63,27 @@ impl DataSink for TracingSink {
                 );
             }
             CollectorEvent::Metric(metric) => {
+                let metric_label = |name: &str| {
+                    metric
+                        .labels
+                        .iter()
+                        .find_map(|(key, value)| (key.as_ref() == name).then_some(value.as_str()))
+                };
+                let is_gpu = metric_label("processor_type") == Some("gpu");
+                let gpu_uuid = is_gpu.then(|| metric_label("gpu_uuid")).flatten();
+                let gpu_serial_number = is_gpu.then(|| metric_label("gpu_serial_number")).flatten();
+                let gpu_model = is_gpu.then(|| metric_label("model")).flatten();
+
                 tracing::info!(
                     endpoint = %context.endpoint_key(),
                     collector = %context.collector_type,
                     rack_id = context.rack_id().map(tracing::field::display),
                     system_uuid = context.system_uuid().map(tracing::field::display),
+                    nvlink_domain_uuid = context.nvlink_domain_uuid().map(tracing::field::display),
                     labels = ?context.labels(),
+                    gpu_uuid,
+                    gpu_serial_number,
+                    gpu_model,
                     metric = %metric.name,
                     key = %metric.key,
                     metric_type = %metric.metric_type,
@@ -157,10 +172,12 @@ mod tests {
     use std::borrow::Cow;
 
     use carbide_instrument::testing::capture_logs;
+    use carbide_uuid::nvlink::NvLinkDomainId;
     use carbide_uuid::rack::RackId;
 
     use super::*;
     use crate::endpoint::test_support::{mac, test_endpoint};
+    use crate::endpoint::{EndpointMetadata, MachineData, SharedSystemUuid};
     use crate::sink::{LogRecord, LogSeverity};
 
     #[test]
@@ -219,6 +236,64 @@ mod tests {
             assert_eq!(logs.len(), 1);
             assert_eq!(logs[0].field("rack_id"), expected_rack_id);
         }
+    }
+
+    #[test]
+    fn tracing_sink_includes_gpu_identity_and_nvlink_domain_for_metric() {
+        let sink = TracingSink::new(&TracingSinkConfig {
+            include_diagnostics: false,
+        });
+        let nvlink_domain_uuid = NvLinkDomainId::new();
+        let mut endpoint = test_endpoint(mac("00:11:22:33:44:55"));
+        endpoint.metadata = Some(EndpointMetadata::Machine(MachineData {
+            machine_id: None,
+            machine_serial: None,
+            system_uuid: SharedSystemUuid::default(),
+            slot_number: None,
+            tray_index: None,
+            nvlink_domain_uuid: Some(nvlink_domain_uuid),
+            driver_version: None,
+        }));
+        let context = EventContext::from_endpoint(&endpoint, "metrics_collector");
+        let event = CollectorEvent::Metric(
+            crate::sink::MetricSample {
+                key: "/redfish/v1/Systems/SYS0/Processors/GPU0/bandwidth".to_string(),
+                name: "hw_metric".to_string(),
+                metric_type: "bandwidth".to_string(),
+                unit: "percent".to_string(),
+                value: 55.0,
+                labels: vec![
+                    (Cow::Borrowed("processor_type"), "gpu".to_string()),
+                    (Cow::Borrowed("model"), "NVIDIA GB100".to_string()),
+                    (
+                        Cow::Borrowed("gpu_uuid"),
+                        "01234567-89ab-cdef-0123-456789abcdef".to_string(),
+                    ),
+                    (
+                        Cow::Borrowed("gpu_serial_number"),
+                        "GPU-SN-0001".to_string(),
+                    ),
+                ],
+                context: None,
+            }
+            .into(),
+        );
+
+        let logs = capture_logs(|| sink.handle_event(&context, &event));
+        let log = logs.first().expect("tracing sink emits one metric log");
+
+        assert_eq!(logs.len(), 1);
+        assert_eq!(log.message, "Metric event");
+        assert_eq!(
+            log.field("gpu_uuid"),
+            Some("01234567-89ab-cdef-0123-456789abcdef")
+        );
+        assert_eq!(log.field("gpu_serial_number"), Some("GPU-SN-0001"));
+        assert_eq!(log.field("gpu_model"), Some("NVIDIA GB100"));
+        assert_eq!(
+            log.field("nvlink_domain_uuid"),
+            Some(nvlink_domain_uuid.to_string().as_str())
+        );
     }
 
     #[test]
