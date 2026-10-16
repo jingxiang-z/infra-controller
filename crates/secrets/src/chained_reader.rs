@@ -19,7 +19,11 @@ use async_trait::async_trait;
 use crate::SecretsError;
 use crate::credentials::{BmcCredentialType, CredentialKey, CredentialReader, Credentials};
 
-pub struct ChainedCredentialReader(Vec<Box<dyn CredentialReader>>);
+/// Tries readers in order, returning the first credential found. Errors stop
+/// lookup; a missing key falls through to the next reader.
+pub struct ChainedCredentialReader<K: Sync = CredentialKey, V: Send = Credentials>(
+    Vec<Box<dyn CredentialReader<K, V>>>,
+);
 
 /// Operator action when a local UFM credential is active or required.
 pub const UFM_LOCAL_CREDENTIAL_REMEDIATION: &str =
@@ -154,18 +158,17 @@ impl CredentialReader for BmcSiteWideRootV0BackendCredentialBlocker {
     }
 }
 
-impl From<Vec<Box<dyn CredentialReader>>> for ChainedCredentialReader {
-    fn from(providers: Vec<Box<dyn CredentialReader>>) -> Self {
+impl<K: Sync, V: Send> From<Vec<Box<dyn CredentialReader<K, V>>>>
+    for ChainedCredentialReader<K, V>
+{
+    fn from(providers: Vec<Box<dyn CredentialReader<K, V>>>) -> Self {
         Self(providers)
     }
 }
 
 #[async_trait]
-impl CredentialReader for ChainedCredentialReader {
-    async fn get_credentials(
-        &self,
-        key: &CredentialKey,
-    ) -> Result<Option<Credentials>, SecretsError> {
+impl<K: Sync, V: Send> CredentialReader<K, V> for ChainedCredentialReader<K, V> {
+    async fn get_credentials(&self, key: &K) -> Result<Option<V>, SecretsError> {
         for provider in &self.0 {
             if let Some(credentials) = provider.get_credentials(key).await? {
                 return Ok(Some(credentials));
