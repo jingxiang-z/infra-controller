@@ -26,9 +26,11 @@ use crate::credentials::{
 };
 
 mod env;
+mod fields;
 mod file;
 
 pub use env::{EnvCredentials, EnvCredentialsConfig};
+pub use fields::{CredentialSources, CredentialValue, FileCredentialReader};
 pub use file::{FileCredentialsConfig, FileCredentialsWatcher};
 
 /// Flat username/password struct for serde compatibility with env vars and

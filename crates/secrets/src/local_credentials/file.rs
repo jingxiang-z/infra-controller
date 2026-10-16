@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
@@ -165,6 +166,13 @@ type WatchEventSender = mpsc::Sender<notify::Event>;
 /// Arms the kernel-backed watcher that forwards create and modify events for
 /// `path` to `tx` as they happen.
 fn start_primary_watcher(path: &Path, tx: WatchEventSender) -> notify::Result<RecommendedWatcher> {
+    start_primary_watchers(&[path.to_path_buf()], tx)
+}
+
+fn start_primary_watchers(
+    paths: &[PathBuf],
+    tx: WatchEventSender,
+) -> notify::Result<RecommendedWatcher> {
     let mut primary = RecommendedWatcher::new(
         move |res: notify::Result<notify::Event>| match res {
             Ok(event) if event.kind.is_create() || event.kind.is_modify() => {
@@ -179,53 +187,68 @@ fn start_primary_watcher(path: &Path, tx: WatchEventSender) -> notify::Result<Re
         },
         notify::Config::default(),
     )?;
-    primary.watch(path, RecursiveMode::NonRecursive)?;
+    for path in paths {
+        primary.watch(path, RecursiveMode::NonRecursive)?;
+    }
     Ok(primary)
 }
 
-pub struct FileCredentialsWatcher {
-    credentials: Arc<ArcSwap<CredentialSnapshot>>,
-    /// `None` when the kernel-backed watcher could not be armed at startup;
-    /// the poll watcher then detects every change on its own.
+/// Shared observation and last-valid snapshot storage for file readers.
+pub(super) struct FileWatcher<T> {
+    pub(super) credentials: Arc<ArcSwap<T>>,
     _primary_watcher: Option<RecommendedWatcher>,
-    _secondary_watcher: PollWatcher,
+    _secondary_watcher: Option<PollWatcher>,
 }
 
-impl FileCredentialsWatcher {
-    pub async fn new(config: FileCredentialsConfig) -> Result<Self, SecretsError> {
-        Self::new_with_primary_watcher(config, start_primary_watcher).await
+impl<T: Send + Sync + 'static> FileWatcher<T> {
+    pub(super) async fn new<F, Fut>(
+        paths: Vec<PathBuf>,
+        poll_interval: Duration,
+        load: F,
+    ) -> Result<Self, SecretsError>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<T, SecretsError>> + Send,
+    {
+        Self::new_with_primary_watcher(paths, poll_interval, load, start_primary_watchers).await
     }
 
-    /// `start_primary` arms the kernel-backed watcher. Its failure is not
-    /// fatal: the poll watcher re-reads the file every `poll_interval` and
-    /// compares contents, so it detects every change on its own. A node that
-    /// cannot provide another inotify instance therefore degrades to polling
-    /// instead of refusing to start. The degradation is only reported once
-    /// the initial load succeeds, so a missing or malformed file still fails
-    /// startup with its own error rather than a polling warning.
-    async fn new_with_primary_watcher(
-        config: FileCredentialsConfig,
-        start_primary: impl FnOnce(&Path, WatchEventSender) -> notify::Result<RecommendedWatcher>,
-    ) -> Result<Self, SecretsError> {
-        let path = config.path();
-        let poll_interval = config.poll_interval();
+    async fn new_with_primary_watcher<F, Fut>(
+        paths: Vec<PathBuf>,
+        poll_interval: Duration,
+        load: F,
+        start_primary: impl FnOnce(&[PathBuf], WatchEventSender) -> notify::Result<RecommendedWatcher>,
+    ) -> Result<Self, SecretsError>
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<T, SecretsError>> + Send,
+    {
         if poll_interval.is_zero() {
             return Err(SecretsError::GenericError(eyre::eyre!(
                 "credentials.file.poll_interval must be greater than zero"
             )));
         }
+        if paths.is_empty() {
+            return Ok(Self {
+                credentials: Arc::new(ArcSwap::from_pointee(load().await?)),
+                _primary_watcher: None,
+                _secondary_watcher: None,
+            });
+        }
         // Fail on a missing file before arming any watcher. `PollWatcher::watch`
         // registers nothing for a missing path yet returns `Ok`, and the kernel
         // watch failure for it would otherwise read as an inotify shortage.
-        tokio::fs::metadata(&path).await.map_err(|err| {
-            SecretsError::GenericError(eyre::Report::new(err).wrap_err(format!(
-                "credentials file {} is not accessible",
-                path.display()
-            )))
-        })?;
+        for path in &paths {
+            tokio::fs::metadata(path).await.map_err(|err| {
+                SecretsError::GenericError(eyre::Report::new(err).wrap_err(format!(
+                    "credentials file {} is not accessible",
+                    path.display()
+                )))
+            })?;
+        }
         let (tx, mut rx) = mpsc::channel(4);
 
-        let primary = start_primary(&path, tx.clone());
+        let primary = start_primary(&paths, tx.clone());
 
         let mut secondary = PollWatcher::new(
             move |res: notify::Result<notify::Event>| match res {
@@ -240,15 +263,17 @@ impl FileCredentialsWatcher {
         )
         .map_err(|err| SecretsError::GenericError(err.into()))?;
 
-        secondary
-            .watch(&path, RecursiveMode::NonRecursive)
-            .map_err(|err| SecretsError::GenericError(err.into()))?;
+        for path in &paths {
+            secondary
+                .watch(path, RecursiveMode::NonRecursive)
+                .map_err(|err| SecretsError::GenericError(err.into()))?;
+        }
 
         // Arm the watchers before reading the initial snapshot. Otherwise a
         // replacement between the read and watcher registration could remain
         // invisible until the file changes again. Events received while this
         // read is in flight remain queued for the reload task below.
-        let initial = match Self::load_file(&path).await {
+        let initial = match load().await {
             Ok(initial) => initial,
             Err(error) => {
                 // Close the receiver before dropping the watchers so callbacks
@@ -268,19 +293,18 @@ impl FileCredentialsWatcher {
             }
         };
         let credentials = Arc::new(ArcSwap::from_pointee(initial));
-        let watched_path = path.clone();
         let credentials_clone = credentials.clone();
         tokio::spawn(async move {
             while let Some(event) = rx.recv().await {
-                if !event
-                    .paths
-                    .iter()
-                    .any(|event_path| event_path.file_name() == watched_path.file_name())
-                {
+                if !event.paths.iter().any(|event_path| {
+                    paths
+                        .iter()
+                        .any(|path| event_path.file_name() == path.file_name())
+                }) {
                     continue;
                 }
 
-                match Self::load_file(&watched_path).await {
+                match load().await {
                     Ok(updated) => {
                         credentials_clone.store(Arc::new(updated));
                     }
@@ -296,8 +320,37 @@ impl FileCredentialsWatcher {
         Ok(Self {
             credentials,
             _primary_watcher: primary,
-            _secondary_watcher: secondary,
+            _secondary_watcher: Some(secondary),
         })
+    }
+}
+
+pub struct FileCredentialsWatcher {
+    watcher: FileWatcher<CredentialSnapshot>,
+}
+
+impl FileCredentialsWatcher {
+    pub async fn new(config: FileCredentialsConfig) -> Result<Self, SecretsError> {
+        Self::new_with_primary_watcher(config, start_primary_watcher).await
+    }
+
+    // Retain the injectable primary watcher for the polling-fallback tests.
+    async fn new_with_primary_watcher(
+        config: FileCredentialsConfig,
+        start_primary: impl FnOnce(&Path, WatchEventSender) -> notify::Result<RecommendedWatcher>,
+    ) -> Result<Self, SecretsError> {
+        let path = config.path();
+        let watcher = FileWatcher::new_with_primary_watcher(
+            vec![path.clone()],
+            config.poll_interval(),
+            move || {
+                let path = path.clone();
+                async move { Self::load_file(&path).await }
+            },
+            |paths, tx| start_primary(&paths[0], tx),
+        )
+        .await?;
+        Ok(Self { watcher })
     }
 
     async fn load_file(path: &Path) -> Result<CredentialSnapshot, SecretsError> {
@@ -331,7 +384,7 @@ impl CredentialReader for FileCredentialsWatcher {
         &self,
         key: &CredentialKey,
     ) -> Result<Option<Credentials>, SecretsError> {
-        self.credentials.load().get_credentials(key).await
+        self.watcher.credentials.load().get_credentials(key).await
     }
 }
 
