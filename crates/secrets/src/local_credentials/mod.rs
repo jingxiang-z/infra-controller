@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 use std::collections::HashMap;
+use std::fmt;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -36,10 +37,23 @@ pub use file::{FileCredentialsConfig, FileCredentialsWatcher};
 /// Flat username/password struct for serde compatibility with env vars and
 /// config files, where the externally-tagged `Credentials` enum layout
 /// (`{"UsernamePassword": {...}}`) is not ergonomic.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct UsernamePassword {
+/// The default password type is `String`; read-only callers may use
+/// `Option<String>` to preserve absence separately from an empty password.
+#[derive(Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct UsernamePassword<P = String> {
+    /// Username used to authenticate.
     pub username: String,
-    pub password: String,
+    /// Password value, or optional password for readers that support absence.
+    pub password: P,
+}
+
+impl<P> fmt::Debug for UsernamePassword<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("UsernamePassword")
+            .field("username", &self.username)
+            .field("password", &"REDACTED")
+            .finish()
+    }
 }
 
 impl From<UsernamePassword> for Credentials {

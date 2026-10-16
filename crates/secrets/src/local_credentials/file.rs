@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+use std::fmt::Display;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -193,6 +194,18 @@ fn start_primary_watchers(
     Ok(primary)
 }
 
+pub(super) fn report_reload_error(error: impl Display) {
+    emit(StaticCredentialWatcherFailed::Reload {
+        error: error.to_string(),
+    });
+}
+
+#[derive(Clone, Copy)]
+enum FileWatchPolicy {
+    Required,
+    PerKey,
+}
+
 /// Shared observation and last-valid snapshot storage for file readers.
 pub(super) struct FileWatcher<T> {
     pub(super) credentials: Arc<ArcSwap<T>>,
@@ -207,10 +220,17 @@ impl<T: Send + Sync + 'static> FileWatcher<T> {
         load: F,
     ) -> Result<Self, SecretsError>
     where
-        F: Fn() -> Fut + Send + Sync + 'static,
+        F: Fn(Option<Arc<T>>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<T, SecretsError>> + Send,
     {
-        Self::new_with_primary_watcher(paths, poll_interval, load, start_primary_watchers).await
+        Self::new_with_primary_watcher(
+            paths,
+            poll_interval,
+            load,
+            start_primary_watchers,
+            FileWatchPolicy::PerKey,
+        )
+        .await
     }
 
     async fn new_with_primary_watcher<F, Fut>(
@@ -218,9 +238,10 @@ impl<T: Send + Sync + 'static> FileWatcher<T> {
         poll_interval: Duration,
         load: F,
         start_primary: impl FnOnce(&[PathBuf], WatchEventSender) -> notify::Result<RecommendedWatcher>,
+        policy: FileWatchPolicy,
     ) -> Result<Self, SecretsError>
     where
-        F: Fn() -> Fut + Send + Sync + 'static,
+        F: Fn(Option<Arc<T>>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<T, SecretsError>> + Send,
     {
         if poll_interval.is_zero() {
@@ -230,25 +251,28 @@ impl<T: Send + Sync + 'static> FileWatcher<T> {
         }
         if paths.is_empty() {
             return Ok(Self {
-                credentials: Arc::new(ArcSwap::from_pointee(load().await?)),
+                credentials: Arc::new(ArcSwap::from_pointee(load(None).await?)),
                 _primary_watcher: None,
                 _secondary_watcher: None,
             });
         }
-        // Fail on a missing file before arming any watcher. `PollWatcher::watch`
-        // registers nothing for a missing path yet returns `Ok`, and the kernel
-        // watch failure for it would otherwise read as an inotify shortage.
+        let mut watch_paths = Vec::with_capacity(paths.len());
         for path in &paths {
-            tokio::fs::metadata(path).await.map_err(|err| {
-                SecretsError::GenericError(eyre::Report::new(err).wrap_err(format!(
-                    "credentials file {} is not accessible",
-                    path.display()
-                )))
-            })?;
+            match tokio::fs::metadata(path).await {
+                Ok(_) => watch_paths.push(path.clone()),
+                Err(err) if matches!(policy, FileWatchPolicy::Required) => {
+                    return Err(SecretsError::GenericError(eyre::Report::new(err).wrap_err(
+                        format!("credentials file {} is not accessible", path.display()),
+                    )));
+                }
+                // Per-key loading records this failure. Periodic reloads retry
+                // even paths that could not be registered with either watcher.
+                Err(_) => {}
+            }
         }
         let (tx, mut rx) = mpsc::channel(4);
 
-        let primary = start_primary(&paths, tx.clone());
+        let primary = start_primary(&watch_paths, tx.clone());
 
         let mut secondary = PollWatcher::new(
             move |res: notify::Result<notify::Event>| match res {
@@ -263,7 +287,7 @@ impl<T: Send + Sync + 'static> FileWatcher<T> {
         )
         .map_err(|err| SecretsError::GenericError(err.into()))?;
 
-        for path in &paths {
+        for path in &watch_paths {
             secondary
                 .watch(path, RecursiveMode::NonRecursive)
                 .map_err(|err| SecretsError::GenericError(err.into()))?;
@@ -273,7 +297,7 @@ impl<T: Send + Sync + 'static> FileWatcher<T> {
         // replacement between the read and watcher registration could remain
         // invisible until the file changes again. Events received while this
         // read is in flight remain queued for the reload task below.
-        let initial = match load().await {
+        let initial = match load(None).await {
             Ok(initial) => initial,
             Err(error) => {
                 // Close the receiver before dropping the watchers so callbacks
@@ -295,24 +319,24 @@ impl<T: Send + Sync + 'static> FileWatcher<T> {
         let credentials = Arc::new(ArcSwap::from_pointee(initial));
         let credentials_clone = credentials.clone();
         tokio::spawn(async move {
-            while let Some(event) = rx.recv().await {
-                if !event.paths.iter().any(|event_path| {
-                    paths
-                        .iter()
-                        .any(|path| event_path.file_name() == path.file_name())
-                }) {
-                    continue;
+            let mut retry = tokio::time::interval_at(
+                tokio::time::Instant::now() + poll_interval,
+                poll_interval,
+            );
+            retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    event = rx.recv() => {
+                        let Some(event) = event else { break; };
+                        if !event.paths.iter().any(|event_path| {
+                            paths.iter().any(|path| event_path.file_name() == path.file_name())
+                        }) { continue; }
+                    }
+                    _ = retry.tick(), if matches!(policy, FileWatchPolicy::PerKey) => {}
                 }
-
-                match load().await {
-                    Ok(updated) => {
-                        credentials_clone.store(Arc::new(updated));
-                    }
-                    Err(err) => {
-                        emit(StaticCredentialWatcherFailed::Reload {
-                            error: err.to_string(),
-                        });
-                    }
+                match load(Some(credentials_clone.load_full())).await {
+                    Ok(updated) => credentials_clone.store(Arc::new(updated)),
+                    Err(err) => report_reload_error(err),
                 }
             }
         });
@@ -343,11 +367,12 @@ impl FileCredentialsWatcher {
         let watcher = FileWatcher::new_with_primary_watcher(
             vec![path.clone()],
             config.poll_interval(),
-            move || {
+            move |_| {
                 let path = path.clone();
                 async move { Self::load_file(&path).await }
             },
             |paths, tx| start_primary(&paths[0], tx),
+            FileWatchPolicy::Required,
         )
         .await?;
         Ok(Self { watcher })
@@ -547,6 +572,7 @@ mod tests {
         "primary static credential watcher unavailable; relying on polling";
 
     #[tokio::test]
+    #[serial_test::serial(credential_watcher_metrics)]
     async fn primary_watcher_failure_falls_back_to_polling() {
         let metrics = MetricsCapture::start();
         let key = CredentialKey::DpuUefi {
@@ -665,6 +691,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[serial_test::serial(credential_watcher_metrics)]
     async fn missing_file_fails_startup_without_watcher_diagnostics() {
         let metrics = MetricsCapture::start();
         let dir = tempdir().expect("create temp dir");
@@ -852,6 +879,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(credential_watcher_metrics)]
     fn live_watcher_failures_keep_the_existing_diagnostics() {
         let metrics = MetricsCapture::start();
 
@@ -989,6 +1017,7 @@ mod tests {
     }
 
     #[test]
+    #[serial_test::serial(credential_watcher_metrics)]
     fn closed_receiver_warnings_do_not_count_as_live_watcher_failures() {
         let metrics = MetricsCapture::start();
 
