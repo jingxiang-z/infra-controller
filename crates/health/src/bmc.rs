@@ -3743,6 +3743,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn static_file_rotation_replays_after_authentication_failure() {
+        use base64::Engine;
+
+        use crate::static_credentials::test_support::{
+            provider_for_credentials_file, wait_for_password, write_credentials,
+        };
+
+        let recorded = Arc::new(StdMutex::new(Vec::new()));
+        let captured = recorded.clone();
+        let router = axum::Router::new().route(
+            "/redfish/v1",
+            axum::routing::get(move |headers: HeaderMap| {
+                let captured = captured.clone();
+                async move {
+                    let mut captured = captured.lock().unwrap();
+                    captured.push(headers[header::AUTHORIZATION].to_str().unwrap().to_owned());
+                    let status = if captured.len() == 2 {
+                        axum::http::StatusCode::UNAUTHORIZED
+                    } else {
+                        axum::http::StatusCode::OK
+                    };
+                    (
+                        status,
+                        axum::Json(serde_json::json!({"@odata.id": "/redfish/v1"})),
+                    )
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = Url::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(listener, router).await.unwrap();
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let password = dir.path().join("password");
+        write_credentials(&password, "first");
+        let addr = test_addr();
+        let provider = provider_for_credentials_file(addr.clone(), password.clone()).await;
+        let client = test_bmc(
+            reqwest(),
+            addr.clone(),
+            provider.clone(),
+            Some(base_url),
+            0,
+            None,
+        )
+        .unwrap();
+        client
+            .get::<TestEntity>(&ODataId::service_root())
+            .await
+            .unwrap();
+        write_credentials(&password, "second");
+        wait_for_password(&*provider, &addr, "second").await;
+        client
+            .get::<TestEntity>(&ODataId::service_root())
+            .await
+            .unwrap();
+        assert_eq!(
+            *recorded.lock().unwrap(),
+            ["admin:first", "admin:first", "admin:second"].map(|value| {
+                format!(
+                    "Basic {}",
+                    base64::engine::general_purpose::STANDARD.encode(value)
+                )
+            })
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn public_read_replays_over_the_wire_after_a_401() {
         // The helper-level tests above pin the retry logic; this one pins the
         // wiring, end to end over real HTTP. Without it, reverting `get` to the
