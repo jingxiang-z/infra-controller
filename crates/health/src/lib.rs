@@ -234,6 +234,13 @@ async fn build_endpoint_wiring(
     }
 
     if let Configurable::Enabled(ref source_cfg) = config.endpoint_sources.cluster {
+        let credentials_file = match &source_cfg.credentials_file {
+            Some(path) => Some(Arc::new(
+                static_credentials::CredentialFile::open(path.clone()).await?,
+            )),
+            None => None,
+        };
+        let validate_at_startup = credentials_file.is_some();
         let cluster_source = ClusterEndpointSource::from_config_with_request_concurrency(
             source_cfg.clone(),
             &reqwest,
@@ -241,7 +248,18 @@ async fn build_endpoint_wiring(
             config.cache_size,
             config.bmc_request_concurrency,
             bmc_latency_metrics,
+            credentials_file,
         );
+        // Like static endpoints, an inventory with a credentials file fails
+        // startup on invalid entries, unknown profiles, or missing usernames.
+        if validate_at_startup {
+            cluster_source
+                .fetch_bmc_hosts()
+                .await
+                .inspect_err(|error| {
+                    tracing::error!(%error, "invalid cluster inventory at startup");
+                })?;
+        }
         sources.push(Arc::new(cluster_source));
     }
 
@@ -783,6 +801,106 @@ mac = "aa:bb:cc:dd:ee:03"
                     .unwrap_or_else(|error| panic!("{name}: {error}"));
             }
         }
+    }
+
+    #[tokio::test]
+    async fn cluster_inventory_credentials_file_selects_profiles_by_collection() {
+        use crate::config::ClusterEndpointSourceConfig;
+        use crate::endpoint::BmcCredentials;
+
+        let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("example");
+        let mut config = Config::default();
+        config.endpoint_sources.carbide_api = Configurable::Disabled;
+        config.endpoint_sources.cluster = Configurable::Enabled(ClusterEndpointSourceConfig {
+            inventory_path: example.join("inventory.example.json"),
+            credentials_file: Some(example.join("credentials.inventory.example.json")),
+            port: Some(8443),
+            ..Default::default()
+        });
+        config.validate().unwrap();
+
+        let wiring = build_endpoint_wiring(&config, None).await.unwrap();
+        let endpoints = wiring.source.fetch_bmc_hosts().await.unwrap();
+        let mut rows = Vec::new();
+        for endpoint in &endpoints {
+            let BmcCredentials::UsernamePassword { username, password } = endpoint
+                .bmc
+                .credential_provider()
+                .fetch_credentials(&endpoint.addr)
+                .await
+                .unwrap()
+            else {
+                panic!("file credentials must use username/password");
+            };
+            let kind = match &endpoint.metadata {
+                Some(EndpointMetadata::Machine(_)) => "machine",
+                Some(EndpointMetadata::PowerShelf(_)) => "power_shelf",
+                Some(EndpointMetadata::Switch(switch)) => match switch.endpoint_role {
+                    SwitchEndpointRole::Bmc => "switch_bmc",
+                    SwitchEndpointRole::Host => "switch_host",
+                },
+                None => "none",
+            };
+            rows.push((endpoint.key(), kind, endpoint.addr.port, username, password));
+        }
+        let expected = |mac: &str, kind, port, username: &str, password: &str| {
+            (
+                mac.to_string(),
+                kind,
+                Some(port),
+                username.to_string(),
+                Some(password.to_string()),
+            )
+        };
+        assert_eq!(
+            rows,
+            [
+                expected(
+                    "AA:BB:CC:DD:EE:01",
+                    "machine",
+                    8443,
+                    "admin",
+                    "node-password"
+                ),
+                // The per-MAC override beats the collection profile.
+                expected(
+                    "AA:BB:CC:DD:EE:02",
+                    "power_shelf",
+                    8443,
+                    "admin",
+                    "individual-password"
+                ),
+                expected(
+                    "AA:BB:CC:DD:EE:03",
+                    "switch_bmc",
+                    8443,
+                    "admin",
+                    "switch-bmc-password"
+                ),
+                expected(
+                    "AA:BB:CC:DD:EE:04",
+                    "switch_host",
+                    8765,
+                    "cumulus",
+                    "switch-password"
+                ),
+            ]
+        );
+
+        // An unknown profile fails startup, as it does for static endpoints.
+        let credentials = tempfile::NamedTempFile::new().unwrap();
+        crate::static_credentials::test_support::write_credentials(credentials.path(), "pass");
+        let Configurable::Enabled(cluster) = &mut config.endpoint_sources.cluster else {
+            unreachable!();
+        };
+        cluster.credentials_file = Some(credentials.path().into());
+        let error = build_endpoint_wiring(&config, None).await.err().unwrap();
+        assert!(
+            error
+                .to_string()
+                .contains("unknown credential profile nodes"),
+            "{error}"
+        );
     }
 
     #[tokio::test]

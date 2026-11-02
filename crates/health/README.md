@@ -62,6 +62,51 @@ Profile/override changes need no restart. Removed overrides restore profile valu
 removing a selected profile or the last username causes lookup errors. Main
 configuration changes, including targets and profile selections, require restart.
 
+## Cluster inventory file
+
+`endpoint_sources.cluster.inventory_path` names a JSON inventory that can be
+shared with the OOB collector. Credentials stay in a separate file in the static
+credentials format; polling, concurrency, and export settings stay in each
+service's own configuration:
+
+```toml
+[endpoint_sources.cluster]
+enabled = true
+inventory_path = "/etc/carbide/inventory.json"
+credentials_file = "/run/secrets/bmc/credentials.json"
+port = 443
+```
+
+See [inventory.example.json](example/inventory.example.json) and
+[credentials.inventory.example.json](example/credentials.inventory.example.json).
+The inventory groups entries directly into `nodes`, `power_shelves`, `switches`
+(switch BMCs), and `switch_hosts` (NVUE hosts); omitted collections are empty.
+Each entry requires `address` (an IP address) and accepts `mac`, `port`, `name`,
+`rack`, `labels`, and the metadata for its collection: `machine` for `nodes`,
+`power_shelf` for `power_shelves`, and `switch` for both switch collections.
+`switch_hosts` entries require `switch`; the collection sets the switch endpoint
+role. Entries without `port` use the source `port`. `hostname` and `bmc_ip`
+remain accepted for `name` and `address`.
+
+With `credentials_file`, every entry requires `mac`, and the collection name
+selects the credential profile, so `nodes` entries use `profiles.nodes`. Fields
+resolve as for static endpoints: **per-MAC override → collection profile**.
+Entries have no `credentials_profile` field. A top-level `default_credentials`
+object is ignored.
+
+Without `credentials_file`, the top-level `default_credentials` object
+(`username`, optional `password`) applies to every entry, and an entry without
+`mac` uses a MAC synthesized from its IPv4 address.
+
+The inventory is reread on every discovery pass, and the credentials file
+reloads as described above; a changed password reaches running collectors on
+the next pass. A pass fails on unknown fields, invalid MACs, MACs repeated
+across collections, metadata for another collection, invalid static endpoint
+fields, unknown profiles, or missing usernames, and existing collectors keep
+running. With `credentials_file`, these errors also fail startup. Rows that
+repeat a BMC IP are skipped after the first. `credentials_file` cannot be
+combined with `cluster_manager_url`.
+
 ## Prerequisites
 
 - Run every command from the repository root.

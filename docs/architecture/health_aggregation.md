@@ -300,6 +300,7 @@ Switch endpoints carry switch ID, serial number, rack ID, rack placement, and NV
 **For local and test deployments**, you can configure explicit machine, switch, or power-shelf identity with `[[endpoint_sources.static_bmc_endpoints]]`. Direct switch host endpoints can use `[[endpoint_sources.static_switch_host_endpoints]]` or `[[endpoint_sources.static_bmc_endpoints]]`. Note the following:
 
 - Static credentials come from a shared JSON file at `endpoint_sources.static_credentials_file`. Entries select named `profiles` with `credentials_profile`; MAC-keyed `overrides` take precedence for each field. Inline credentials are rejected. File changes reload automatically, retaining the last valid snapshot if an update fails.
+- A cluster inventory at `endpoint_sources.cluster.inventory_path` groups `nodes`, `power_shelves`, `switches`, and `switch_hosts` with the same metadata as static endpoints. With `endpoint_sources.cluster.credentials_file`, each collection selects the credential profile of the same name and MAC-keyed `overrides` take precedence; otherwise the inventory's `default_credentials` apply.
 - Static machine endpoints can include the same serial number, rack placement, and NVLink domain UUID metadata
 - Static switch endpoints can include serial number, rack placement, and NVLink domain UUID metadata
 - Static power-shelf endpoints can include serial number and NVLink domain UUID metadata

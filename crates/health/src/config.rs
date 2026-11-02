@@ -211,10 +211,19 @@ impl Default for EndpointSourcesConfig {
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClusterEndpointSourceConfig {
-    /// Path to a JSON inventory file containing BMC endpoints and credentials for the cluster.
-    /// Used when `cluster_manager_url` is absent.
+    /// Path to a JSON inventory file for the cluster, reread on every discovery pass.
+    /// Used when `cluster_manager_url` is absent. Entries are grouped into `nodes`,
+    /// `power_shelves`, `switches`, and `switch_hosts`.
     #[serde(default)]
     pub inventory_path: PathBuf,
+
+    /// JSON credentials file for `inventory_path`, in the `static_credentials_file`
+    /// format. Each entry resolves the profile named after its collection; per-MAC
+    /// overrides take precedence, so every entry needs `mac`. Without this file, the
+    /// inventory's embedded `default_credentials` apply to every entry.
+    /// Not used with `cluster_manager_url`.
+    #[serde(default)]
+    pub credentials_file: Option<PathBuf>,
 
     /// Cluster manager head-node URL (e.g. https://10.x.x.x:8081).
     /// When set, inventory and credentials are fetched live via cluster manager JSON RPC
@@ -254,6 +263,7 @@ impl Default for ClusterEndpointSourceConfig {
     fn default() -> Self {
         Self {
             inventory_path: PathBuf::default(),
+            credentials_file: None,
             cluster_manager_url: None,
             cluster_manager_partition: default_cluster_manager_partition(),
             default_username: default_cluster_manager_username(),
@@ -271,6 +281,17 @@ impl ClusterEndpointSourceConfig {
                     .to_string(),
             );
         }
+        if let Some(credentials_file) = &self.credentials_file {
+            if credentials_file.as_os_str().is_empty() {
+                return Err("cluster endpoint source `credentials_file` must not be empty".into());
+            }
+            if self.cluster_manager_url.is_some() {
+                return Err(
+                    "cluster endpoint source `credentials_file` cannot be used with `cluster_manager_url`"
+                        .into(),
+                );
+            }
+        }
         Ok(())
     }
 }
@@ -279,6 +300,7 @@ impl std::fmt::Debug for ClusterEndpointSourceConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ClusterEndpointSourceConfig")
             .field("inventory_path", &self.inventory_path)
+            .field("credentials_file", &self.credentials_file)
             .field("cluster_manager_url", &self.cluster_manager_url)
             .field("cluster_manager_partition", &self.cluster_manager_partition)
             .field("default_username", &self.default_username)
@@ -403,7 +425,7 @@ impl StaticBmcEndpoint {
             + usize::from(self.switch.is_some())
     }
 
-    fn validate(&self, config_path: &str, index: usize) -> Result<(), String> {
+    pub(crate) fn validate(&self, config_path: &str, index: usize) -> Result<(), String> {
         if self.identity_count() > 1 {
             return Err(format!(
                 "{config_path}[{index}] must specify at most one of machine, power_shelf, or switch"
@@ -3589,6 +3611,33 @@ mac = "00:11:22:33:44:55"
                     ),
                     ..ClusterEndpointSourceConfig::default()
                 } => Yields(()),
+            }
+
+            "shared inventory credentials" {
+                ClusterEndpointSourceConfig {
+                    inventory_path: PathBuf::from("/etc/carbide/inventory.json"),
+                    credentials_file: Some(PathBuf::from("/run/secrets/bmc/credentials.json")),
+                    ..ClusterEndpointSourceConfig::default()
+                } => Yields(()),
+                ClusterEndpointSourceConfig {
+                    inventory_path: PathBuf::from("/etc/carbide/inventory.json"),
+                    credentials_file: Some(PathBuf::new()),
+                    ..ClusterEndpointSourceConfig::default()
+                } => FailsWith(
+                    "cluster endpoint source `credentials_file` must not be empty".to_string()
+                ),
+                ClusterEndpointSourceConfig {
+                    credentials_file: Some(PathBuf::from("/run/secrets/bmc/credentials.json")),
+                    cluster_manager_url: Some(
+                        "https://cluster-manager.example"
+                            .parse()
+                            .expect("cluster manager URL should parse")
+                    ),
+                    ..ClusterEndpointSourceConfig::default()
+                } => FailsWith(
+                    "cluster endpoint source `credentials_file` cannot be used with `cluster_manager_url`"
+                        .to_string()
+                ),
             }
         );
     }

@@ -25,6 +25,7 @@ pub use model::{
     EndpointSource, InventorySnapshot, MachineData, PowerShelfData, RackInventory,
     SharedSystemUuid, SwitchData, SwitchEndpointRole,
 };
+pub(crate) use sources::static_endpoint_metadata;
 pub use sources::{CompositeEndpointSource, StaticEndpointSource};
 
 pub use crate::bmc::{BoxFuture, CredentialProvider};
