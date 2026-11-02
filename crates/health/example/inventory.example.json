@@ -1,0 +1,40 @@
+{
+  "nodes": [
+    {
+      "mac": "aa:bb:cc:dd:ee:01",
+      "address": "192.0.2.11",
+      "name": "compute-01",
+      "rack": "rack-01",
+      "labels": { "site": "dev" },
+      "machine": { "serial": "MN-001", "slot_number": 1, "tray_index": 0 }
+    }
+  ],
+  "power_shelves": [
+    {
+      "mac": "aa:bb:cc:dd:ee:02",
+      "address": "192.0.2.12",
+      "name": "pwr-01",
+      "rack": "rack-01",
+      "power_shelf": { "serial": "PS-001" }
+    }
+  ],
+  "switches": [
+    {
+      "mac": "aa:bb:cc:dd:ee:03",
+      "address": "192.0.2.13",
+      "name": "nvsw-01-bmc",
+      "rack": "rack-01",
+      "switch": { "serial": "SW-001" }
+    }
+  ],
+  "switch_hosts": [
+    {
+      "mac": "aa:bb:cc:dd:ee:04",
+      "address": "192.0.2.14",
+      "port": 8765,
+      "name": "nvsw-01",
+      "rack": "rack-01",
+      "switch": { "serial": "SW-001", "is_primary": true }
+    }
+  ]
+}

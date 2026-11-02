@@ -58,6 +58,123 @@ fn parse_static_nvlink_domain_uuid(
     })
 }
 
+/// Builds endpoint metadata from a static endpoint's `machine`, `power_shelf`,
+/// or `switch` entry, dropping invalid IDs and nil NVLink domains with a warning.
+pub(crate) fn static_endpoint_metadata(cfg: &StaticBmcEndpoint) -> Option<EndpointMetadata> {
+    if let Some(power_shelf) = &cfg.power_shelf {
+        let id = power_shelf.id.as_ref().and_then(|id| match id.parse() {
+            Ok(id) => Some(id),
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    power_shelf_id = ?id,
+                    rack_id = cfg.rack_id.as_deref().map(tracing::field::display),
+                    "Invalid power_shelf.id in static endpoint config"
+                );
+                None
+            }
+        });
+        let serial = power_shelf.serial.clone();
+        let nvlink_domain_uuid = parse_static_nvlink_domain_uuid(
+            power_shelf.nvlink_domain_uuid.as_deref(),
+            "power_shelf",
+            cfg.rack_id.as_deref(),
+        )
+        .filter(|domain_uuid| domain_uuid != &NvLinkDomainId::nil());
+
+        Some(EndpointMetadata::PowerShelf(PowerShelfData {
+            id,
+            serial,
+            nvlink_domain_uuid,
+        }))
+    } else if let Some(switch) = &cfg.switch {
+        let id = switch.id.as_ref().and_then(|id| match id.parse() {
+            Ok(id) => Some(id),
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    switch_id = ?id,
+                    rack_id = cfg.rack_id.as_deref().map(tracing::field::display),
+                    "Invalid switch.id in static endpoint config"
+                );
+                None
+            }
+        });
+        let serial = switch
+            .serial
+            .clone()
+            .or_else(|| switch.id.clone())
+            .unwrap_or_else(|| cfg.mac.clone());
+
+        let nvlink_domain_uuid = parse_static_nvlink_domain_uuid(
+            switch.nvlink_domain_uuid.as_deref(),
+            "switch",
+            cfg.rack_id.as_deref(),
+        )
+        .filter(|domain_uuid| domain_uuid != &NvLinkDomainId::nil());
+
+        let endpoint_role = match switch.endpoint_role {
+            StaticSwitchEndpointRole::Bmc => SwitchEndpointRole::Bmc,
+            StaticSwitchEndpointRole::Host => SwitchEndpointRole::Host,
+        };
+
+        let nmxc_enabled = switch.nmxc_enabled.unwrap_or(switch.is_primary);
+        let nmxt_enabled = switch.nmxt_enabled.unwrap_or(switch.is_primary);
+
+        Some(EndpointMetadata::Switch(SwitchData {
+            log_checkpoint_identity: None,
+            id,
+            serial: Some(serial),
+            slot_number: switch.slot_number,
+            tray_index: switch.tray_index,
+            nvlink_domain_uuid,
+            endpoint_role,
+            is_primary: switch.is_primary,
+            nmxc_enabled,
+            nmxt_enabled,
+        }))
+    } else if let Some(machine) = &cfg.machine {
+        let machine_id = machine.id.as_deref().and_then(|id| match id.parse() {
+            Ok(machine_id) => Some(machine_id),
+            Err(error) => {
+                tracing::warn!(
+                    ?error,
+                    ?id,
+                    rack_id = cfg.rack_id.as_deref().map(tracing::field::display),
+                    "Invalid machine.id in static endpoint config"
+                );
+
+                None
+            }
+        });
+
+        let nvlink_domain_uuid = parse_static_nvlink_domain_uuid(
+            machine.nvlink_domain_uuid.as_deref(),
+            "machine",
+            cfg.rack_id.as_deref(),
+        );
+
+        let driver_version = machine
+            .driver_version
+            .as_deref()
+            .map(str::trim)
+            .none_if_empty()
+            .map(str::to_string);
+
+        Some(EndpointMetadata::Machine(MachineData {
+            machine_id,
+            machine_serial: machine.serial.clone(),
+            system_uuid: SharedSystemUuid::default(),
+            slot_number: machine.slot_number,
+            tray_index: machine.tray_index,
+            nvlink_domain_uuid,
+            driver_version,
+        }))
+    } else {
+        None
+    }
+}
+
 pub struct StaticEndpointSource {
     endpoints: Vec<Arc<BmcEndpoint>>,
 }
@@ -113,118 +230,7 @@ impl StaticEndpointSource {
                 }
             };
 
-            let metadata = if let Some(power_shelf) = &cfg.power_shelf {
-                let id = power_shelf.id.as_ref().and_then(|id| match id.parse() {
-                    Ok(id) => Some(id),
-                    Err(error) => {
-                        tracing::warn!(
-                            ?error,
-                            power_shelf_id = ?id,
-                            rack_id = cfg.rack_id.as_deref().map(tracing::field::display),
-                            "Invalid power_shelf.id in static endpoint config"
-                        );
-                        None
-                    }
-                });
-                let serial = power_shelf.serial.clone();
-                let nvlink_domain_uuid = parse_static_nvlink_domain_uuid(
-                    power_shelf.nvlink_domain_uuid.as_deref(),
-                    "power_shelf",
-                    cfg.rack_id.as_deref(),
-                )
-                .filter(|domain_uuid| domain_uuid != &NvLinkDomainId::nil());
-
-                Some(EndpointMetadata::PowerShelf(PowerShelfData {
-                    id,
-                    serial,
-                    nvlink_domain_uuid,
-                }))
-            } else if let Some(switch) = &cfg.switch {
-                let id = switch.id.as_ref().and_then(|id| match id.parse() {
-                    Ok(id) => Some(id),
-                    Err(error) => {
-                        tracing::warn!(
-                            ?error,
-                            switch_id = ?id,
-                            rack_id = cfg.rack_id.as_deref().map(tracing::field::display),
-                            "Invalid switch.id in static endpoint config"
-                        );
-                        None
-                    }
-                });
-                let serial = switch
-                    .serial
-                    .clone()
-                    .or_else(|| switch.id.clone())
-                    .unwrap_or_else(|| cfg.mac.clone());
-
-                let nvlink_domain_uuid = parse_static_nvlink_domain_uuid(
-                    switch.nvlink_domain_uuid.as_deref(),
-                    "switch",
-                    cfg.rack_id.as_deref(),
-                )
-                .filter(|domain_uuid| domain_uuid != &NvLinkDomainId::nil());
-
-                let endpoint_role = match switch.endpoint_role {
-                    StaticSwitchEndpointRole::Bmc => SwitchEndpointRole::Bmc,
-                    StaticSwitchEndpointRole::Host => SwitchEndpointRole::Host,
-                };
-
-                let nmxc_enabled = switch.nmxc_enabled.unwrap_or(switch.is_primary);
-                let nmxt_enabled = switch.nmxt_enabled.unwrap_or(switch.is_primary);
-
-                Some(EndpointMetadata::Switch(SwitchData {
-                    log_checkpoint_identity: None,
-                    id,
-                    serial: Some(serial),
-                    slot_number: switch.slot_number,
-                    tray_index: switch.tray_index,
-                    nvlink_domain_uuid,
-                    endpoint_role,
-                    is_primary: switch.is_primary,
-                    nmxc_enabled,
-                    nmxt_enabled,
-                }))
-            } else if let Some(machine) = &cfg.machine {
-                let machine_id = machine.id.as_deref().and_then(|id| match id.parse() {
-                    Ok(machine_id) => Some(machine_id),
-                    Err(error) => {
-                        tracing::warn!(
-                            ?error,
-                            ?id,
-                            rack_id = cfg.rack_id.as_deref().map(tracing::field::display),
-                            "Invalid machine.id in static endpoint config"
-                        );
-
-                        None
-                    }
-                });
-
-                let nvlink_domain_uuid = parse_static_nvlink_domain_uuid(
-                    machine.nvlink_domain_uuid.as_deref(),
-                    "machine",
-                    cfg.rack_id.as_deref(),
-                );
-
-                let driver_version = machine
-                    .driver_version
-                    .as_deref()
-                    .map(str::trim)
-                    .none_if_empty()
-                    .map(str::to_string);
-
-                Some(EndpointMetadata::Machine(MachineData {
-                    machine_id,
-                    machine_serial: machine.serial.clone(),
-                    system_uuid: SharedSystemUuid::default(),
-                    slot_number: machine.slot_number,
-                    tray_index: machine.tray_index,
-                    nvlink_domain_uuid,
-                    driver_version,
-                }))
-            } else {
-                None
-            };
+            let metadata = static_endpoint_metadata(cfg);
 
             let addr = BmcAddr {
                 ip: cfg.ip,

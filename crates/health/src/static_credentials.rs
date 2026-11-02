@@ -16,7 +16,7 @@
  */
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use carbide_secrets::local_credentials::{FileCredentialsConfig, StructuredCredentialReader};
@@ -62,9 +62,43 @@ impl From<snapshot::ResolutionError> for HealthError {
     }
 }
 
-/// Shares one eagerly initialized secrets reader across static endpoints.
-pub(crate) struct StaticCredentialProvider {
+/// One eagerly initialized credentials file, resolving credentials by MAC and
+/// profile from its latest valid snapshot.
+pub(crate) struct CredentialFile {
     reader: Reader,
+    path: PathBuf,
+}
+
+impl CredentialFile {
+    pub(crate) async fn open(path: PathBuf) -> Result<Self, HealthError> {
+        let reader = Reader::new(FileCredentialsConfig {
+            path: Some(path.clone()), poll_interval: Some(Duration::from_secs(60)), ..Default::default()
+        }).await.map_err(|error| {
+            tracing::error!(path = %path.display(), %error, "failed to load static credential file at startup");
+            HealthError::from(error)
+        })?;
+        Ok(Self { reader, path })
+    }
+
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(crate) fn resolve(
+        &self,
+        mac: MacAddress,
+        profile: Option<&str>,
+    ) -> Result<BmcCredentials, HealthError> {
+        self.reader
+            .snapshot()
+            .resolve(mac, profile)
+            .map_err(HealthError::from)
+    }
+}
+
+/// Shares one credentials file across static endpoints.
+pub(crate) struct StaticCredentialProvider {
+    file: CredentialFile,
     targets: HashMap<MacAddress, Option<String>>,
 }
 
@@ -73,22 +107,15 @@ impl StaticCredentialProvider {
         path: PathBuf,
         configs: Vec<(MacAddress, Option<String>)>,
     ) -> Result<Self, HealthError> {
-        let reader = Reader::new(FileCredentialsConfig {
-            path: Some(path.clone()), poll_interval: Some(Duration::from_secs(60)), ..Default::default()
-        }).await.map_err(|error| {
-            tracing::error!(path = %path.display(), %error, "failed to load static credential file at startup");
-            HealthError::from(error)
-        })?;
-        let snapshot = reader.snapshot();
+        let file = CredentialFile::open(path).await?;
         let mut targets = HashMap::with_capacity(configs.len());
         for (mac, config) in configs {
-            snapshot.resolve(mac, config.as_deref()).map_err(|error| {
-                tracing::error!(path = %path.display(), mac_address = %mac, %error, "invalid static credentials at startup");
-                HealthError::from(error)
+            file.resolve(mac, config.as_deref()).inspect_err(|error| {
+                tracing::error!(path = %file.path.display(), mac_address = %mac, %error, "invalid static credentials at startup");
             })?;
             targets.insert(mac, config);
         }
-        Ok(Self { reader, targets })
+        Ok(Self { file, targets })
     }
 }
 
@@ -104,10 +131,7 @@ impl CredentialProvider for StaticCredentialProvider {
             let config = self.targets.get(&mac).ok_or_else(|| {
                 HealthError::GenericError("static endpoint has no configured credentials".into())
             })?;
-            self.reader
-                .snapshot()
-                .resolve(mac, config.as_deref())
-                .map_err(HealthError::from)
+            self.file.resolve(mac, config.as_deref())
         })
     }
 }
@@ -135,7 +159,10 @@ mod tests {
             mac: Some(mac),
         };
         let mut provider = StaticCredentialProvider {
-            reader,
+            file: CredentialFile {
+                reader,
+                path: file.path().into(),
+            },
             targets: HashMap::new(),
         };
         for profile in [None, Some("missing")] {
@@ -191,7 +218,7 @@ pub(crate) mod test_support {
         .await
         .expect("test reader");
         Arc::new(StaticCredentialProvider {
-            reader,
+            file: CredentialFile { reader, path },
             targets: HashMap::from([(addr.mac.unwrap(), Some("test".into()))]),
         })
     }
