@@ -51,7 +51,8 @@ use crate::api_client::{ApiClientWrapper, ApiEndpointSource};
 use crate::collectors::BackoffConfig;
 use crate::config::Configurable;
 use crate::endpoint::{
-    ClusterEndpointSource, CompositeEndpointSource, EndpointSource, StaticEndpointSource,
+    ClusterEndpointSource, CompositeEndpointSource, EndpointSource, HttpEndpointSource,
+    StaticEndpointSource,
 };
 use crate::limiter::{BucketLimiter, NoopLimiter, RateLimiter};
 use crate::metrics::{BmcLatencyMetrics, MetricsManager, run_metrics_server};
@@ -231,6 +232,18 @@ async fn build_endpoint_wiring(
             bmc_latency_metrics.clone(),
         ));
         sources.push(endpoint_source as Arc<dyn EndpointSource>);
+    }
+
+    if let Configurable::Enabled(ref source_cfg) = config.endpoint_sources.http {
+        let http_source = HttpEndpointSource::from_config_with_request_concurrency(
+            source_cfg,
+            &reqwest,
+            config.bmc_proxy_url.as_ref(),
+            config.cache_size,
+            config.bmc_request_concurrency,
+            bmc_latency_metrics.clone(),
+        )?;
+        sources.push(Arc::new(http_source));
     }
 
     if let Configurable::Enabled(ref source_cfg) = config.endpoint_sources.cluster {

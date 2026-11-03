@@ -195,6 +195,9 @@ pub struct EndpointSourcesConfig {
 
     /// Cluster inventory file source (file or cluster manager JSON RPC)
     pub cluster: Configurable<ClusterEndpointSourceConfig>,
+
+    /// HTTP inventory server that lists targets and issues BMC credentials.
+    pub http: Configurable<HttpEndpointSourceConfig>,
 }
 
 impl Default for EndpointSourcesConfig {
@@ -205,6 +208,34 @@ impl Default for EndpointSourcesConfig {
             static_bmc_endpoints: Vec::new(),
             static_switch_host_endpoints: Vec::new(),
             cluster: Configurable::Disabled,
+            http: Configurable::Disabled,
+        }
+    }
+}
+
+/// An HTTP inventory server. Each discovery pass lists targets with
+/// `GET /v1/targets`, and each BMC client fetches its credentials with
+/// `POST /v1/targets/{mac}/credentials`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpEndpointSourceConfig {
+    /// Base URL of the inventory server. Mutually exclusive with `socket_path`.
+    #[serde(default)]
+    pub url: Option<url::Url>,
+
+    /// Unix socket the inventory server listens on. Mutually exclusive with `url`.
+    #[serde(default)]
+    pub socket_path: Option<PathBuf>,
+}
+
+impl HttpEndpointSourceConfig {
+    pub fn validate(&self) -> Result<(), String> {
+        match (&self.url, &self.socket_path) {
+            (Some(_), None) => Ok(()),
+            (None, Some(path)) if !path.as_os_str().is_empty() => Ok(()),
+            _ => Err(
+                "http endpoint source requires exactly one of `url` or `socket_path`".to_string(),
+            ),
         }
     }
 }
@@ -534,6 +565,9 @@ impl EndpointSourcesConfig {
             static_macs.insert(mac, (SWITCH_HOST_ENDPOINTS_PATH, index));
         }
 
+        if let Configurable::Enabled(http) = &self.http {
+            http.validate()?;
+        }
         if let Configurable::Enabled(cluster) = &self.cluster {
             cluster.validate()?;
         }
