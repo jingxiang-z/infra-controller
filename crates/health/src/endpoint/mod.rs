@@ -16,10 +16,12 @@
  */
 
 mod cluster;
+mod http;
 mod model;
 mod sources;
 
 pub use cluster::ClusterEndpointSource;
+pub use http::HttpEndpointSource;
 pub use model::{
     BmcAddr, BmcCredentials, BmcEndpoint, ComponentInventory, EndpointMetadata, EndpointSnapshot,
     EndpointSource, InventorySnapshot, MachineData, PowerShelfData, RackInventory,
